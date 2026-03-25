@@ -15,6 +15,7 @@ from PIL import Image, ImageDraw, ImageFont # <--- 新增 Pillow 用于写字
 # 1. 密钥配置
 CA_KEY = "xxx"
 SILICON_KEY = "xxx"
+SEARCH_LIMIT = 5                # 聚合前5条热门笔记的素材
 
 # 初始化客户端
 ca_client = OpenAI(api_key=CA_KEY, base_url="https://api.chatanywhere.tech/v1")
@@ -107,25 +108,37 @@ def show_confirm_box(title, content):
     root.destroy()
     return res
 
+def clean_temp_files():
+    """清理临时文件夹"""
+    print("🧹 正在清理临时文件...")
+    files = glob.glob(os.path.join(TEMP_IMG_DIR, "*"))
+    for f in files:
+        try:
+            os.remove(f)
+        except:
+            pass
+
 def generate_silicon_pure_background():
-    """调用硅基流动生成纯净、无文字的苹果风格背景图用于首图"""
-    print(f"🎨 硅基绘图：正在生成纯净【首图背景】...")
+    """调用硅基流动生成具有系列化一致性的纯净、带Logo首图背景图"""
+    print(f"🎨 硅基动力：正在生成系列化【首图背景】...")
     url = "https://api.siliconflow.cn/v1/images/generations"
     
-    # 强制要求无文字、简约、金色iPhone轮廓、底部有黑Logo
+    # --- 核心修改：锁定系列化视觉风格的提示词 ---
+    # 风格定位：3D 悬浮样机风 (极简、高级柔光、带固定Logo)
+    # 强制要求：斜侧方悬浮，暖灰色渐变呼吸感背景，严禁文字。
     refined_prompt = (
-        f"A premium minimalist Apple style digital poster background. "
-        f"A gentle golden iPhone silhouette is centered. NO TEXT OR WORDS. "
-        f"Soft warm gradient gray background. Very clean composition. "
-        f"CRITICAL: A distinct solid black Apple logo at the very bottom center. "
-        f"4k resolution, studio lighting."
+        "一张极其简约的苹果风格产品海报。主体是一部金色的 iPhone 16 Pro 手机斜侧方悬浮在画面中央，特写镜头。 "
+        "背景是纯净的暖灰色与白色细腻渐变。光影柔和，侧方有电影级的柔光灯照射，手机边缘呈现出精致的金属拉丝质感和高光。 "
+        "画面极其干净，充满呼吸感。CRITICAL: 背景没有任何杂物，严禁出现任何文字、字母或乱码。 "
+        "底部中央有一个实心黑色小苹果 Logo。8k分辨率，商业摄影，商业广告美学。"
     )
+    # ----------------------------------------
     
     payload = {
         "model": IMAGE_MODEL,
         "prompt": refined_prompt,
         "size": "1024x1024",
-        "num_inference_steps": 25 # Kolors建议步数
+        "num_inference_steps": 25 # Kolors建议步数，确保细节
     }
     headers = {"Authorization": f"Bearer {SILICON_KEY}", "Content-Type": "application/json"}
     try:
@@ -254,7 +267,7 @@ def main_workflow():
 
     # 3. 提取素材与原图图集
     materials, original_images = [], []
-    for i, feed in enumerate(results['feeds'][:3]):
+    for i, feed in enumerate(results['feeds'][:SEARCH_LIMIT]):
         f_id = feed.get('id'); x_token = feed.get('xsecToken')
         res = run_cmd(f'python cdp_publish.py --reuse-existing-tab get-feed-detail --feed-id "{f_id}" --xsec-token "{x_token}"')
         if res and 'detail' in res and 'note' in res['detail']:
@@ -274,15 +287,20 @@ def main_workflow():
     processed_imgs = []
     ai_cover_success = False
 
-    # --- 步骤 A：AI 生成首图背景 + Pillow 合成标题 ---
+    # --- 步骤 A：AI 生成纯净首图背景 (已根据系列化需求替换 Prompt) ---
     pure_bg_url = generate_silicon_pure_background()
     if pure_bg_url:
         p_path = download_and_process_image(pure_bg_url, 0, is_ai=True)
         if p_path:
-            # 核心：调用 Pillow 写字
-            if pillow_add_text_to_image(p_path, new_post['title']):
-                processed_imgs.append(p_path)
-                ai_cover_success = True
+            # --- 修改：暂时不用 Pillow 在首图印字 ---
+            # if pillow_add_text_to_image(p_path, new_post['title']):
+            #     processed_imgs.append(p_path)
+            #     ai_cover_success = True
+            
+            # 直接使用纯净 AI 背景图作为首图
+            processed_imgs.append(p_path)
+            ai_cover_success = True
+            # -------------------------------------
 
     # --- 步骤 B：后续步骤直接下载原图图集 (除第一张外) ---
     if original_images and len(original_images) > 1:
@@ -296,7 +314,8 @@ def main_workflow():
     # --- 核心人机审核：仅审核首图质量 ---
     if not ai_cover_success:
         print("🛑 AI 生成纯净首图失败，等待决策...")
-        if not show_confirm_box("⚠️ 首图生图失败", "AI无法生成首图背景。\n是否改用【原笔记首图】发布？"):
+        if not show_confirm_box("⚠️ 首图生图失败", "AI无法生成首图背景。\n是否改用【原笔记图集】全套发布？"):
+            clean_temp_files() # <--- 保留：点否则清理
             print("❌ 用户中止发布。"); return
         
         # 降级：如果用户同意，把被跳过的第一张原图下载下来补上
@@ -306,9 +325,11 @@ def main_workflow():
             if p: processed_imgs.insert(0, p) # 插入到最前面
     else:
         print("🔍 首图海报合成成功，等待用户审核...")
-        # 弹出确认框让用户看一眼 temp_downloads 里的 img_0.jpg 文字对不对
-        if not show_confirm_box("🖼️ 审核首图海报文字", f"AI背景 + Pillow标题已合成。\n请去查看预览。\n满意文字并发布吗？"):
-            print("❌ 用户对合成文字不满意，中止。"); return
+        # --- 修改：审核提示词更新，仅审核背景和 Logo 质量 ---
+        if not show_confirm_box("🖼️ 审核首图系列感", f"专题：{SEARCH_KEYWORD}\nAI已生成系列化画册风背景（不带字）。\n满意质感并发布吗？"):
+            clean_temp_files() # <--- 保留：点否则清理
+            print("❌ 用户对首图质感不满意，中止。"); return
+        # ------------------------------------------------
 
     # 6. 发布
     if not processed_imgs: return
@@ -330,9 +351,7 @@ def main_workflow():
     save_history_id(main_id)
     print(f"✅ 【{SEARCH_KEYWORD}】发布完成！")
     # 清理临时文件
-    for f in glob.glob(os.path.join(TEMP_IMG_DIR, "*")):
-        try: os.remove(f)
-        except: pass
+    clean_temp_files()
 
 if __name__ == "__main__":
     main_workflow()
