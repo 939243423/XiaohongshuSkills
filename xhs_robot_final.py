@@ -33,35 +33,59 @@ FONT_FILE = "AlibabaPuHuiTi-3-65-Medium.ttf"
 # -------------------------------
 
 # 3. 苹果技巧专题矩阵 (100个)
-APPLE_TOPICS = [
-    "iPhone隐藏截屏技巧", "iOS自带录屏高级玩法", "iPhone控制中心自定义", "iPhone实况照片变视频",
-    "iPhone语音隔离通话更清晰", "iPhone轻点背面快捷指令", "iPhone自带输入法骚操作", "iPhone锁屏组件花式玩法",
-    "iPhone长截图保姆级教程", "iPhone科学计算器隐藏模式", "iPhone辅助触控悬浮球设置", "iPhone专注模式深度定制",
-    "iPhone原况文本提取实操", "iPhone连拍照片筛选技巧", "iPhone科学备忘录公式输入", "iPhone自带测量仪用法",
-    "iPhone镜像前置镜头设置", "iPhone照片批量重命名", "iPhone隐藏相册加密方法", "iPhone侧边键功能自定义",
-    "iPhone电池健康长寿秘籍", "iPhone信号增强玄学设置", "iPhone系统内存深度清理", "iPhone关机也能找回技巧",
-    "iOS系统更新降级防坑指南", "iPhone后台刷新哪些该关", "iPhone充电上限80%有必要吗", "iPhone发烫降温5个绝招",
-    "iPhone垃圾短信自动拦截", "iPhone隐私安全设置检查", "iPhone定位服务省电方案", "iPhone辅助功能护眼模式",
-    "iPhone夜间模式自动切换", "iPhone低电量模式自动触发", "iPhone空间音频体验优化",
-    "iPhone电影模式分级调色", "iPhone延时摄影参数分享", "iPhone夜间模式拍星空技巧", "iPhone微距模式创意玩法",
-    "iPhone自带相册修图参数", "iPhone录制ProRes格式科普", "iPhone拍照滤镜风格自定义", "iPhone人像模式虚化调整",
-    "iPhone快门音关闭小技巧", "iPhone录制空间视频教学", "iPhone网格线构图入门", "iPhone曝光锁定对焦技巧",
-    "iPhone视频提取背景音乐", "iPhone制作动图GIF教程", "iPhone镜头擦拭防刮指南",
-    "iPhone备忘录扫描全能王", "iPhone提醒事项自律神器", "iPhone快捷指令自动化实战", "iPhone文件App远程连接NAS",
-    "iPhone自带翻译实时同传", "iPhone邮件App高级过滤", "iPhone屏幕使用时间控制", "iPhone Safari浏览器隐藏功能",
-    "iPhone分屏画中画开启技巧", "iPhone跨设备剪贴板联动", "iPhone自带天气预报深度解读", "iPhone股市App高级用法",
-    "iPhone健康App经期追踪", "iPhone体能训练数据分析", "iPhone键盘单手模式切换",
-    "iPad分屏协同办公技巧", "iPad随航Mac变副屏教程", "Apple Watch洗手检测开启", "Apple Watch手势控制技巧",
-    "AirPods降噪模式切换逻辑", "iCloud云端备份空间优化", "AirDrop投送失败解决办法", "Mac与iPhone镜像操控",
-    "AppleWatch查找手机黑科技", "AirPods自动切换设备设置", "AppleTV遥控器隐藏用法", "苹果全家桶接力续写功能",
-    "iPad搭配Pencil绘图入门", "iPad学习笔记APP大比拼", "苹果共享相簿邀请技巧",
-    "iOS18主屏幕图标变色", "iPhone本地AI消除路人", "Siri语音助手进化版玩法", "iPhone数学笔记实时演算",
-    "iPhone浏览器干扰控制功能", "iOS18锁屏底端图标更换", "iPhone密码管理App用法", "iPhone通话录音法律合规点",
-    "iPhone智能汇总长文摘要", "iPhone动态壁纸空间效果",
-    "iPhone工程模式查看信号", "iPhone恢复模式保命指南", "iPhone DFU模式进阶操作", "iPhone海外账号注册流程",
-    "iPhone更换地区后的新功能", "iPhone白噪音背景音设置", "iPhone辅助功能放大镜用法", "iPhone实时字幕功能开启",
-    "iPhone引导访问防他人乱点", "iPhone连接外置硬盘剪辑视频"
-]
+APPLE_TOPICS_DICT = {
+    "基础交互与系统定制": [
+        "iPhone长截图保姆级教程", "iPhone控制中心自定义", 
+        "iPhone辅助触控悬浮球设置", "iPhone侧边键功能自定义", "iPhone键盘单手模式切换",
+        "iOS18主屏幕图标变色", "iOS18锁屏底端图标更换", "Siri语音助手进化版玩法",
+        "iPhone实时字幕功能开启", "iPhone辅助功能放大镜用法", "iPhone引导访问防他人乱点",
+        "iPhone轻点背面快捷指令", "iPhone锁屏组件花式玩法","iPhone隐藏截屏技巧",
+    ],
+    "影像摄影与相册管理": [
+        "iOS自带录屏高级玩法", "iPhone实况照片变视频", "iPhone镜像前置镜头设置",
+        "iPhone隐藏相册加密方法", "iPhone人像模式虚化调整", "iPhone电影模式分级调色",
+        "iPhone微距模式创意玩法", "iPhone延时摄影参数分享", "iPhone夜间模式拍星空技巧",
+        "iPhone照片批量重命名", "iPhone连拍照片筛选技巧", "iPhone制作动图GIF教程",
+        "iPhone视频提取背景音乐", "iPhone录制ProRes格式科普", "iPhone录制空间视频教学",
+        "iPhone拍照滤镜风格自定义", "iPhone自带相册修图参数", "iPhone快门音关闭小技巧",
+        "iPhone本地AI消除路人", "iPhone网格线构图入门", "iPhone曝光锁定对焦技巧"
+    ],
+    "性能安全与防坑指南": [
+        "iPhone电池健康长寿秘籍", "iPhone信号增强玄学设置", "iPhone充电上限80%有必要吗",
+        "iPhone系统内存深度清理", "iPhone发烫降温5个绝招", "iPhone定位服务省电方案",
+        "iPhone后台刷新哪些该关", "iPhone隐私安全设置检查", "iPhone垃圾短信自动拦截",
+        "iPhone关机也能找回技巧", "iPhone密码管理App用法", "iOS系统更新降级防坑指南",
+        "iPhone空间音频体验优化", "iPhone镜头擦拭防刮指南", "iPhone工程模式查看信号"
+    ],
+    "高效办公与生产力": [
+        "iPhone原况文本提取实操", "iPhone备忘录扫描全能王", "iPhone科学备忘录公式输入",
+        "iPhone数学笔记实时演算", "iPhone文件App远程连接NAS", "iPhone智能汇总长文摘要",
+        "iPhone自带翻译实时同传", "iPhone提醒事项自律神器", "iPhone快捷指令自动化实战",
+        "iPhone邮件App高级过滤", "iPhone Safari浏览器隐藏功能", "iPhone浏览器干扰控制功能",
+        "iPhone分屏画中画开启技巧", "iPhone科学计算器隐藏模式"
+    ],
+    "生活健康与小工具": [
+        "iPhone自带测量仪用法", "iPhone语音隔离通话更清晰", "iPhone屏幕使用时间控制",
+        "iPhone专注模式深度定制", "iPhone健康App经期追踪", "iPhone体能训练数据分析",
+        "iPhone自带天气预报深度解读", "iPhone股市App高级用法", "iPhone通话录音法律合规点",
+        "iPhone白噪音背景音设置", "iPhone辅助功能护眼模式", "iPhone夜间模式自动切换",
+        "iPhone低电量模式自动触发", "iPhone动态壁纸空间效果"
+    ],
+    "全家桶生态联动": [
+        "iPad分屏协同办公技巧", "iPad随航Mac变副屏教程", "iPad搭配Pencil绘图入门",
+        "iPad学习笔记APP大比拼", "Apple Watch洗手检测开启", "Apple Watch手势控制技巧",
+        "AppleWatch查找手机黑科技", "AirPods降噪模式切换逻辑", "AirPods自动切换设备设置",
+        "iCloud云端备份空间优化", "AirDrop投送失败解决办法", "Mac与iPhone镜像操控",
+        "AppleTV遥控器隐藏用法", "苹果全家桶接力续写功能", "苹果共享相簿邀请技巧",
+        "iPhone跨设备剪贴板联动"
+    ],
+    "极客进阶与海外相关": [
+        "iPhone恢复模式保命指南", "iPhone DFU模式进阶操作", "iPhone海外账号注册流程",
+        "iPhone更换地区后的新功能", "iPhone连接外置硬盘剪辑视频"
+    ]
+}
+
+APPLE_TOPICS = [topic for sublist in APPLE_TOPICS_DICT.values() for topic in sublist]
 
 # 随机选题
 SEARCH_KEYWORD = random.choice(APPLE_TOPICS)
@@ -377,10 +401,14 @@ def main_workflow():
             if p: processed_imgs.insert(0, p) # 插入到最前面
     else:
         print("🔍 首图海报合成成功，等待用户审核...")
+        print(f"📝 标题预览: {new_post['title']}")
         # --- 修改：审核提示词更新，仅审核背景和 Logo 质量 ---
-        if not show_confirm_box("🖼️ 审核首图系列感", f"专题：{SEARCH_KEYWORD}\nAI已生成系列化画册风背景（不带字）。\n满意质感并发布吗？"):
-            clean_temp_files() # <--- 保留：点否则清理
-            print("❌ 用户对首图质感不满意，中止。"); return
+        if not show_confirm_box("🖼️ 审核首图系列感", f"专题：{SEARCH_KEYWORD}\nAI已生成系列化画册风背景（不带字）。\n满意质感并发布吗（不满意将改用原笔记第一张图）？"):
+            print("⚠️ 用户对首图质感不满意，改用原笔记第一张图...")
+            if original_images:
+                p = download_and_process_image(original_images[0], 0, is_ai=False)
+                if p and processed_imgs:
+                    processed_imgs[0] = p # 替换掉生成的第一张图
         # ------------------------------------------------
     # 8. 发布
     if not processed_imgs: return

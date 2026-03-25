@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="UTF-8">
+  <style>
+    /* ================= 核心重置与变量 ================= */
+    :root {
+      --base-w: 1242px;
+      --base-h: 1660px;
+      /* 关键：在此处替换你的高级感字体文件名 */
+      --font-family: "PingFang SC", "Hiragino Sans GB", "Source Han Sans CN", sans-serif;
+      --font-sub: "Arial", sans-serif;
+
+      /* 统一定义拟物化装饰物 (测试用SVG，可替换为高清PNG链接) */
+      --clip-svg: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><path d="M50 0 L10 40 L30 40 L30 100 L70 100 L70 40 L90 40 Z" fill="white"/></svg>');
+      --tape-svg: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 60"><rect width="200" height="60" fill="rgba(255,255,255,0.5)"/></svg>');
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    @font-face {
+      font-family: "PingFang SC";
+      src: url("PingFangSC-Medium.ttf");
+      /* <--- 请修改这里为实际字体文件名 */
+    }
+
+    /* 基础画布 */
+    body {
+      width: var(--base-w);
+      height: var(--base-h);
+      font-family: var(--font-family);
+      background-color: #FBFBFD;
+      overflow: hidden;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+
+    /* 小红书 3:4 画布 */
+    .xhs-canvas {
+      width: var(--base-w);
+      height: var(--base-h);
+      background-color: #fff;
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      border-radius: 40px;
+    }
+
+    /* 内容通用区域 */
+    .content-layer {
+      flex: 1;
+      width: 100%;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      padding: 70px;
+      position: relative;
+      z-index: 3;
+    }
+
+    /* 大标题通用排版 */
+    .title-text {
+      font-size: 85px;
+      font-weight: 700;
+      color: #1D1D1F;
+      line-height: 1.4;
+      letter-spacing: 0.05em;
+      text-align: center;
+      word-wrap: break-word;
+    }
+
+    /* 副标题/MD2Card */
+    .md2card {
+      font-family: var(--font-sub);
+      font-size: 60px;
+      color: #333;
+      margin-top: 50px;
+      text-align: center;
+    }
+
+    /* 通用底部下载栏 */
+    .footer-bar {
+      width: 100%;
+      height: 180px;
+      background: #fff;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      border-top: 1px solid #eee;
+      z-index: 10;
+    }
+
+    .download-btn {
+      background-color: #EFEFF4;
+      color: #666;
+      padding: 25px 60px;
+      border-radius: 20px;
+      font-size: 40px;
+      font-family: var(--font-sub);
+      display: flex;
+      align-items: center;
+      gap: 15px;
+    }
+
+    /* ==================== 20种不同视觉风格的定义 ==================== */
+
+    /* --- 风格 1-3：复刻你认可的方案 --- */
+
+    /* S1：粉色手写记事本 (Pink Notebook) */
+    .canvas-1 .notebook-paper {
+      width: 100%;
+      height: 100%;
+      border: 20px solid #FADADD;
+      border-radius: 30px;
+      background-image: linear-gradient(#e5e5e5 1px, transparent 1px), linear-gradient(90deg, #e5e5e5 1px, transparent 1px);
+      background-size: 50px 50px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      padding: 60px;
+      filter: drop-shadow(0 10px 20px rgba(0, 0, 0, 0.05));
+    }
+
+    /* S2：蓝色浏览器窗口 (Blue Browser) */
+    .canvas-2 .main-content {
+      background-color: #89CFF0;
+    }
+
+    .canvas-2 .browser-window {
+      width: 100%;
+      height: 100%;
+      background: #fff;
+      border: 1px solid #ccc;
+      border-radius: 25px;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      box-shadow: 0 30px 60px rgba(0, 0, 0, 0.15);
+    }
+
+    .canvas-2 .browser-header {
+      width: 100%;
+      height: 90px;
+      border-bottom: 2px solid #ccc;
+      display: flex;
+      align-items: center;
+      padding: 0 30px;
+      gap: 15px;
+    }
+
+    .canvas-2 .dot {
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
+    }
+
+    .canvas-2 .red {
+      background-color: #ff5f57;
+    }
+
+    .canvas-2 .yellow {
+      background-color: #febc2e;
+    }
+
+    .canvas-2 .green {
+      background-color: #28c840;
+    }
+
+    .canvas-2 .browser-body {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      padding: 80px;
+    }
+
+    /* S3：蓝色挂历回形针 (Blue Calendar) */
+    .canvas-3 .main-content {
+      background-color: #89CFF0;
+    }
+
+    .canvas-3 .calendar-paper {
+      width: 100%;
+      height: 100%;
+      background: #fff;
+      border-radius: 25px;
+      position: relative;
+      padding: 150px 80px 80px 80px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      box-shadow: 0 30px 60px rgba(0, 0, 0, 0.15);
+    }
+
+    .canvas-3 .clip {
+      width: 30px;
+      height: 120px;
+      background: #fff;
+      border: 8px solid #89CFF0;
+      border-radius: 20px;
+      position: absolute;
+      top: -60px;
+      transform: rotate(-5deg);
+    }
+
+    /* <--- 回形针定位 */
+
+    /* --- 风格 4-20：新增的爆款系列化风格 --- */
+
+    /* S4：杂志大刊 (Vogue Magazine) - 侧重超大标题和通栏遮罩 */
+    .canvas-4 .main-content {
+      justify-content: flex-end;
+      align-items: flex-start;
+      background: #fff;
+    }
+
+    .canvas-4 .title-text {
+      font-size: 130px;
+      border-left: 20px solid #000;
+      padding-left: 40px;
+      text-align: left;
+      line-height: 1;
+      margin-bottom: 30px;
+    }
+
+    /* S5：极客黑板 (Dark Slate) - 侧重反色和monospace字体 */
+    .canvas-5 .main-content {
+      background: #1D1D1F;
+      padding: 100px;
+    }
+
+    .canvas-5 .title-text {
+      color: #8BC34A;
+      font-family: monospace;
+      text-align: left;
+      text-shadow: 0 0 20px #8BC34A;
+    }
+
+    .canvas-5 .download-btn {
+      background: #333;
+      color: #fff;
+    }
+
+    /* S6：拍立得照片 (Polaroid) - 侧重照片白框和手写感 */
+    .canvas-6 .main-content {
+      background: #eee;
+    }
+
+    .canvas-6 .polaroid-frame {
+      background: #fff;
+      border-radius: 10px;
+      padding: 40px 40px 100px 40px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+      transform: rotate(3deg);
+    }
+
+    .canvas-6 .title-text {
+      font-family: serif;
+      font-size: 60px;
+      margin-top: 20px;
+    }
+
+    /* S7：半透明色块通栏 (Translucent Bar) */
+    .canvas-7 .bar {
+      position: absolute;
+      top: 30%;
+      width: 120%;
+      height: 250px;
+      background: rgba(137, 207, 240, 0.7);
+      backdrop-filter: blur(10px);
+      transform: rotate(-8deg);
+      z-index: 2;
+    }
+
+    .canvas-7 .title-text {
+      font-size: 100px;
+      background: #fff;
+      padding: 20px 50px;
+      border-radius: 20px;
+    }
+
+    /* S8：多巴胺色块叠加 (Dopamine Colors) */
+    .canvas-8 .block-1 {
+      position: absolute;
+      top: 10%;
+      left: 10%;
+      width: 200px;
+      height: 200px;
+      background: #ff4500;
+      border-radius: 50%;
+      opacity: 0.5;
+    }
+
+    .canvas-8 .block-2 {
+      position: absolute;
+      bottom: 20%;
+      right: 10%;
+      width: 300px;
+      height: 300px;
+      background: #febc2e;
+      border-radius: 40px;
+      opacity: 0.5;
+    }
+
+    .canvas-8 .title-text {
+      font-size: 110px;
+      color: #ff4500;
+    }
+
+    /* S9：顶部便利贴 (Sticky Note) */
+    .canvas-9 .sticky-note {
+      width: 400px;
+      height: 400px;
+      background: #fffc76;
+      position: absolute;
+      top: 0;
+      left: 0;
+      transform: rotate(-5deg) translateY(-20%);
+      padding: 50px;
+      box-shadow: 0 10px 20px rgba(0, 0, 0, 0.1);
+      border-radius: 5px;
+    }
+
+    .canvas-9 .title-text {
+      font-size: 50px;
+      text-align: left;
+    }
+
+    /* S10：深色玻璃 (Deep Glass) */
+    .canvas-10 .main-content {
+      background: #000;
+    }
+
+    .canvas-10 .glass-card {
+      width: 100%;
+      height: 100%;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 30px;
+      backdrop-filter: blur(20px);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      padding: 60px;
+    }
+
+    .canvas-10 .title-text {
+      color: #fff;
+      text-shadow: 0 0 20px rgba(255, 255, 255, 0.5);
+    }
+
+    /* ... 请在 canvas-11 到 canvas-20 中继续添加你的自定义 CSS ... */
+
+    /* 统一内部结构的显示控制 */
+    .only-style-1,
+    .only-style-2,
+    .only-style-3,
+    .only-style-4,
+    .only-style-5,
+    .only-style-6,
+    .only-style-7,
+    .only-style-8,
+    .only-style-9,
+    .only-style-10,
+    .only-style-11,
+    .only-style-12,
+    .only-style-13,
+    .only-style-14,
+    .only-style-15,
+    .only-style-16,
+    .only-style-17,
+    .only-style-18,
+    .only-style-19,
+    .only-style-20 {
+      display: none;
+    }
+
+    /* 默认全隐藏 */
+  </style>
+</head>
+
+<body>
+
+  <div class="xhs-canvas canvas-1" id="xhs_canvas">
+    <div class="bar"></div>
+    <div class="mask"></div>
+    <div class="block-1"></div>
+    <div class="block-2"></div>
+    <div class="content-layer main-content">
+
+      <div class="notebook-paper only-style-1">
+        <div class="title-text" id="t_1"></div>
+        <div class="md2card">MD2Card Pro</div>
+      </div>
+
+      <div class="browser-window only-style-2">
+        <div class="browser-header">
+          <div class="dot red"></div>
+          <div class="dot yellow"></div>
+          <div class="dot green"></div>
+        </div>
+        <div class="browser-body">
+          <div class="title-text" id="t_2"></div>
+          <div class="md2card">MD2Card Pro</div>
+        </div>
+      </div>
+
+      <div class="calendar-paper only-style-3">
+        <div class="clip"></div>
+        <div class="title-text" id="t_3"></div>
+        <div class="md2card">MD2Card Pro</div>
+      </div>
+
+      <div class="polaroid-frame only-style-4">
+        <div class="title-text" id="t_4"></div>
+      </div>
+
+      <div class="only-style-5">
+        <div class="title-text" id="t_5"></div>
+      </div>
+
+    </div>
+
+    <div class="footer-bar">
+      <div class="download-btn"><span>&#x2193;</span> <span>下载</span></div>
+    </div>
+
+  </div>
+
+  <script>
+    // 提供给 Python 调用渲染的唯一入口函数
+    function renderProCover (data) {
+      const canvas = document.getElementById('xhs_canvas');
+      canvas.className = `xhs-canvas canvas-${data.styleId}`;
+      // 隐藏所有特定风格的HTML结构
+      document.querySelectorAll('.only-style-1, .only-style-2, .only-style-3, .only-style-4, .only-style-5, .only-style-6, .only-style-7, .only-style-8, .only-style-9, .only-style-10').forEach(el => el.style.display = 'none');
+      // 显示当前选定风格的HTML
+      document.querySelector(`.only-style-${data.styleId}`).style.display = 'flex';
+      // 填入标题文案
+      document.getElementById(`t_${data.styleId}`).innerText = data.title;
+    }
+  </script>
+</body>
+
+</html>
