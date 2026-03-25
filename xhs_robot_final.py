@@ -7,7 +7,7 @@ import subprocess
 import requests
 import glob
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import messagebox, ttk # <--- 新增 ttk 用于表格展示
 from openai import OpenAI
 from PIL import Image, ImageDraw, ImageFont # <--- 新增 Pillow 用于写字
 
@@ -107,6 +107,45 @@ def show_confirm_box(title, content):
     res = messagebox.askyesno(title, content)
     root.destroy()
     return res
+
+def show_selection_dialog(valid_feeds):
+    """展示带有真实标题和正文预览的选择框"""
+    root = tk.Tk()
+    root.title("请选择核心对标笔记")
+    root.attributes("-topmost", True)
+    root.geometry("800x500")
+
+    selected_data = {"index": 0}
+
+    label = tk.Label(root, text=f"专题：{SEARCH_KEYWORD}\n请选择主素材来源（已获取详情内容）：", pady=10)
+    label.pack()
+
+    columns = ("序号", "真实标题/内容预览", "笔记ID")
+    tree = ttk.Treeview(root, columns=columns, show="headings")
+    tree.heading("序号", text="序号")
+    tree.heading("真实标题/内容预览", text="真实标题/内容预览")
+    tree.heading("笔记ID", text="笔记ID")
+    tree.column("序号", width=50, anchor="center")
+    tree.column("真实标题/内容预览", width=550)
+    tree.column("笔记ID", width=150)
+
+    for i, item in enumerate(valid_feeds):
+        tree.insert("", "end", values=(i, item['display_text'], item['id']))
+
+    tree.pack(fill="both", expand=True, padx=10, pady=10)
+
+    def on_confirm():
+        selection = tree.selection()
+        if selection:
+            item = tree.item(selection[0], "values")
+            selected_data["index"] = int(item[0])
+        root.destroy()
+
+    btn = tk.Button(root, text="确定选择 (默认首条)", command=on_confirm, width=30, height=2, bg="#f39c12", fg="white")
+    btn.pack(pady=15)
+
+    root.mainloop()
+    return selected_data["index"]
 
 def clean_temp_files():
     """清理临时文件夹"""
@@ -256,34 +295,50 @@ def main_workflow():
     if not results or 'feeds' not in results:
         print("❌ 搜索失败。"); return
 
-    # 2. 筛选
-    unposted = [f for f in results['feeds'] if f.get('id') not in history_ids]
-    if not unposted:
-        print("⚠️ 专题已发过。"); return
+    # 2. 批量抓取详情以供选择
+    print(f"🔍 正在预抓取前 {SEARCH_LIMIT} 条笔记详情以供选择...")
+    valid_feeds = []
+    unposted_raw = [f for f in results['feeds'] if f.get('id') not in history_ids]
     
-    target_main = unposted[0]
-    main_id = target_main.get('id')
-    print(f"🎯 选定目标: {main_id}")
-
-    # 3. 提取素材与原图图集
-    materials, original_images = [], []
-    for i, feed in enumerate(results['feeds'][:SEARCH_LIMIT]):
-        f_id = feed.get('id'); x_token = feed.get('xsecToken')
-        res = run_cmd(f'python cdp_publish.py --reuse-existing-tab get-feed-detail --feed-id "{f_id}" --xsec-token "{x_token}"')
+    for f in unposted_raw[:SEARCH_LIMIT]:
+        f_id = f.get('id')
+        res = run_cmd(f'python cdp_publish.py --reuse-existing-tab get-feed-detail --feed-id "{f_id}" --xsec-token "{f.get("xsecToken")}"')
         if res and 'detail' in res and 'note' in res['detail']:
             note = res['detail']['note']
-            materials.append(f"标题: {note.get('title')}\n内容: {note.get('desc')}")
-            if f_id == main_id:
-                # 提取整套图集用于兜底
-                for img_obj in note.get('imageList', []):
-                    info = img_obj.get('infoList', [])
-                    if info: original_images.append(info[-1].get('url'))
+            title = note.get('title', '').strip()
+            desc = note.get('desc', '').strip()
+            # 清洗预览文字
+            display_text = title if title else desc.replace('\n', ' ')[:60]
+            valid_feeds.append({
+                'id': f_id,
+                'note': note,
+                'display_text': display_text
+            })
 
+    if not valid_feeds:
+        print("⚠️ 专题已发过或无素材。"); return
+    
+    # --- 核心交互：展示抓取后的真实内容进行选择 ---
+    selected_idx = show_selection_dialog(valid_feeds)
+    target_data = valid_feeds[selected_idx]
+    main_id = target_data['id']
+    main_note = target_data['note']
+    print(f"🎯 选定目标: {main_id} | {target_data['display_text']}")
+
+    # 3. 整理素材
+    materials = [f"标题: {main_note.get('title')}\n内容: {main_note.get('desc')}"]
+    
     # 4. 文案合成
     new_post = ai_create_content(materials)
     if not new_post: return
 
-    # 5. 差异化图片组合策略
+    # 5. 提取图片
+    original_images = []
+    for img_obj in main_note.get('imageList', []):
+        info = img_obj.get('infoList', [])
+        if info: original_images.append(info[-1].get('url'))
+
+    # 6. 处理图片组合
     processed_imgs = []
     ai_cover_success = False
 
@@ -300,18 +355,15 @@ def main_workflow():
             # 直接使用纯净 AI 背景图作为首图
             processed_imgs.append(p_path)
             ai_cover_success = True
-            # -------------------------------------
 
     # --- 步骤 B：后续步骤直接下载原图图集 (除第一张外) ---
     if original_images and len(original_images) > 1:
         print(f"📸 正在下载原笔记步骤图集 (第2-{len(original_images)}张)...")
-        # 从 index 1 开始下载，即跳过第一张原图
         for idx, url in enumerate(original_images[1:]): 
-            # 索引偏移，保存为 img_1, img_2...
             p = download_and_process_image(url, idx + 1, is_ai=False)
             if p: processed_imgs.append(p)
 
-    # --- 核心人机审核：仅审核首图质量 ---
+    # 7. 人机审核
     if not ai_cover_success:
         print("🛑 AI 生成纯净首图失败，等待决策...")
         if not show_confirm_box("⚠️ 首图生图失败", "AI无法生成首图背景。\n是否改用【原笔记图集】全套发布？"):
@@ -330,8 +382,7 @@ def main_workflow():
             clean_temp_files() # <--- 保留：点否则清理
             print("❌ 用户对首图质感不满意，中止。"); return
         # ------------------------------------------------
-
-    # 6. 发布
+    # 8. 发布
     if not processed_imgs: return
     print(f"📝 准备发布原创作品: {new_post['title']}")
     content_file = os.path.join(TEMP_IMG_DIR, "post.txt")
@@ -347,7 +398,7 @@ def main_workflow():
     )
     run_cmd(publish_cmd)
 
-    # 7. 善后
+    # 9. 善后
     save_history_id(main_id)
     print(f"✅ 【{SEARCH_KEYWORD}】发布完成！")
     # 清理临时文件
