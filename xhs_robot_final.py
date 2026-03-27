@@ -123,16 +123,64 @@ def run_cmd(cmd):
         return None
     except: return None
 
-def show_confirm_box(title, content):
-    """弹出 Yes/No 确认框"""
+def show_confirm_box(title, content, timeout=0, default=True):
+    """弹出 Yes/No 确认框, 支持超时默认"""
     root = tk.Tk()
-    root.withdraw()
+    root.title(title)
     root.attributes("-topmost", True)
-    res = messagebox.askyesno(title, content)
-    root.destroy()
-    return res
+    
+    window_width = 400
+    window_height = 150
+    screen_width = root.winfo_screenwidth()
+    screen_height = root.winfo_screenheight()
+    x_cordinate = int((screen_width/2) - (window_width/2))
+    y_cordinate = int((screen_height/2) - (window_height/2))
+    root.geometry(f"{window_width}x{window_height}+{x_cordinate}+{y_cordinate}")
+    
+    result = [default]
+    
+    def on_yes():
+        result[0] = True
+        root.destroy()
+        
+    def on_no():
+        result[0] = False
+        root.destroy()
+        
+    lbl = tk.Label(root, text=content, pady=20, padx=20)
+    lbl.pack()
+    
+    btn_frame = tk.Frame(root)
+    btn_frame.pack(pady=10)
+    
+    btn_yes = tk.Button(btn_frame, text="是 (Yes)", width=15, command=on_yes)
+    btn_yes.pack(side="left", padx=10)
+    
+    btn_no = tk.Button(btn_frame, text="否 (No)", width=15, command=on_no)
+    btn_no.pack(side="right", padx=10)
 
-def show_selection_dialog(valid_feeds):
+    if timeout > 0:
+        def update_timer(left):
+            if left <= 0:
+                print(f"[{title}] 计时结束，使用默认选择: {'是' if default else '否'}")
+                root.destroy()
+            else:
+                if default:
+                    btn_yes.config(text=f"是 (Yes) ({left}s)")
+                else:
+                    btn_no.config(text=f"否 (No) ({left}s)")
+                root.after(1000, update_timer, left - 1)
+        root.after(1000, update_timer, timeout)
+
+    def on_closing():
+        result[0] = False
+        root.destroy()
+    root.protocol("WM_DELETE_WINDOW", on_closing)
+
+    root.mainloop()
+    return result[0]
+
+def show_selection_dialog(valid_feeds, timeout=0, default_index=0):
     """展示带有真实标题和正文预览的选择框"""
     root = tk.Tk()
     root.title("请选择核心对标笔记")
@@ -168,6 +216,17 @@ def show_selection_dialog(valid_feeds):
     btn = tk.Button(root, text="确定选择 (默认首条)", command=on_confirm, width=30, height=2, bg="#f39c12", fg="white")
     btn.pack(pady=15)
 
+    if timeout > 0:
+        def update_timer(left):
+            if left <= 0:
+                print(f"[选择对标笔记] 计时结束，默认选择第 {default_index+1} 条")
+                selected_data["index"] = default_index
+                root.destroy()
+            else:
+                btn.config(text=f"确定选择 (默认首条 {left}s)")
+                root.after(1000, update_timer, left - 1)
+        root.after(1000, update_timer, timeout)
+
     root.mainloop()
     return selected_data["index"]
 
@@ -186,14 +245,9 @@ def generate_silicon_pure_background():
     print(f"🎨 硅基动力：正在生成系列化【首图背景】...")
     url = "https://api.siliconflow.cn/v1/images/generations"
     
-    # --- 核心修改：锁定系列化视觉风格的提示词 ---
-    # 风格定位：3D 悬浮样机风 (极简、高级柔光、带固定Logo)
-    # 强制要求：斜侧方悬浮，暖灰色渐变呼吸感背景，严禁文字。
+    # 数码生活桌面特写
     refined_prompt = (
-        "一张极其简约的苹果风格产品海报。主体是一部金色的 iPhone 16 Pro 手机斜侧方悬浮在画面中央，特写镜头。 "
-        "背景是纯净的暖灰色与白色细腻渐变。光影柔和，侧方有电影级的柔光灯照射，手机边缘呈现出精致的金属拉丝质感和高光。 "
-        "画面极其干净，充满呼吸感。CRITICAL: 背景没有任何杂物，严禁出现任何文字、字母或乱码。 "
-        "底部中央有一个实心黑色小苹果 Logo。8k分辨率，商业摄影，商业广告美学。"
+        "竖版构图，9:16 比例。一张干净极简橡木桌子的中景特写。一台 iPhone 16 Pro 和一副 AirPods 整齐地摆放在中心。阳光透过窗户洒下，在桌面和设备上形成错综美观的斑驳叶影。高端生活方式摄影，浅景深，背景优美模糊。温馨、宁静、治愈的氛围。中性色调，8k 分辨率，照片级真实，电影级光影，无文字，画面极其干净且有呼吸感，留有大量留白。"
     )
     # ----------------------------------------
     
@@ -279,14 +333,27 @@ def download_and_process_image(url, index, is_ai=False):
     return None
 
 def ai_create_content(materials):
-    """文案创作：双线托底"""
-    combined_raw = "\n---\n".join([f"素材: {m}" for m in materials])
+    """文案创作：强力洗稿+爆款重塑"""
+    combined_raw = "\n---\n".join([f"参考素材: {m}" for m in materials])
+    
+    # --- 核心改进：加强洗稿约束 ---
     prompt = f"""
-    针对专题【{SEARCH_KEYWORD}】创作小红书爆款笔记。
-    要求：标题20字内，正文分点带Emoji数字（1️⃣, 2️⃣...），语气幽默，加5个标签。
-    素材背景：{combined_raw}
+    你现在是小红书百万粉丝的【苹果数码博主】。请针对专题【{SEARCH_KEYWORD}】进行二次创作。
+    
+    【强制要求】：
+    1. 严禁原样照抄素材内容！必须用你专业且略带幽默的口吻重新组织语言。
+    2. 结构重塑：提取素材中的干货核心，转化为更易读的保姆级教程。
+    3. 视觉引导：正文分点必须带Emoji数字（1️⃣, 2️⃣...），每段话最多不超过100字，保持呼吸感。
+    4. 标题要求：必须是标题党！标题总字数一定要在20字内。
+    5. 结尾【极其重要】：正文的最后一行至少带5个相关热门标签，格式为 #标签1 #标签2 #标签3。
+
+
+    【参考素材背景】：
+    {combined_raw}
+
     请输出严格的 JSON 格式：{{"title": "...", "content": "..."}}
     """
+    # ---------------------------
     
     # 尝试 CA
     try:
@@ -343,7 +410,7 @@ def main_workflow():
         print("⚠️ 专题已发过或无素材。"); return
     
     # --- 核心交互：展示抓取后的真实内容进行选择 ---
-    selected_idx = show_selection_dialog(valid_feeds)
+    selected_idx = show_selection_dialog(valid_feeds, timeout=20, default_index=0)
     target_data = valid_feeds[selected_idx]
     main_id = target_data['id']
     main_note = target_data['note']
@@ -390,7 +457,7 @@ def main_workflow():
     # 7. 人机审核
     if not ai_cover_success:
         print("🛑 AI 生成纯净首图失败，等待决策...")
-        if not show_confirm_box("⚠️ 首图生图失败", "AI无法生成首图背景。\n是否改用【原笔记图集】全套发布？"):
+        if not show_confirm_box("⚠️ 首图生图失败", "AI无法生成首图背景。\n是否改用【原笔记图集】全套发布？", timeout=20, default=True):
             clean_temp_files() # <--- 保留：点否则清理
             print("❌ 用户中止发布。"); return
         
@@ -403,7 +470,7 @@ def main_workflow():
         print("🔍 首图海报合成成功，等待用户审核...")
         print(f"📝 标题预览: {new_post['title']}")
         # --- 修改：审核提示词更新，仅审核背景和 Logo 质量 ---
-        if not show_confirm_box("🖼️ 审核首图系列感", f"专题：{SEARCH_KEYWORD}\nAI已生成系列化画册风背景（不带字）。\n满意质感并发布吗（不满意将改用原笔记第一张图）？"):
+        if not show_confirm_box("🖼️ 审核首图系列感", f"专题：{SEARCH_KEYWORD}\nAI已生成系列化画册风背景（不带字）。\n满意质感并发布吗（不满意将改用原笔记第一张图）？", timeout=20, default=False):
             print("⚠️ 用户对首图质感不满意，改用原笔记第一张图...")
             if original_images:
                 p = download_and_process_image(original_images[0], 0, is_ai=False)
