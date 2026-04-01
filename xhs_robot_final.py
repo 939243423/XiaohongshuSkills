@@ -22,7 +22,7 @@ ca_client = OpenAI(api_key=CA_KEY, base_url="https://api.chatanywhere.tech/v1")
 sf_client = OpenAI(api_key=SILICON_KEY, base_url="https://api.siliconflow.cn/v1")
 
 # 2. 模型与生图配置
-CA_MODEL = "gpt-3.5-turbo"
+CA_MODEL = "gpt-5"
 SF_TEXT_MODEL = "Pro/deepseek-ai/DeepSeek-V3.2"  
 IMAGE_MODEL = "Kwai-Kolors/Kolors" # 使用 Kolors 模型
 
@@ -344,8 +344,8 @@ def ai_create_content(materials):
     1. 严禁原样照抄素材内容！必须用你专业且略带幽默的口吻重新组织语言。
     2. 结构重塑：提取素材中的干货核心，转化为更易读的保姆级教程。
     3. 视觉引导：正文分点必须带Emoji数字（1️⃣, 2️⃣...），每段话最多不超过100字，保持呼吸感。
-    4. 标题要求：必须是标题党！标题总字数算上表情符号一定要在19字内。
-    5. 结尾【极其重要】：正文的最后一行至少带5个相关热门标签，格式为 #标签1 #标签2 #标签3。
+    4. 标题要求：必须是标题党！标题总字数算上表情符号一定要在20字内(不然会发不出去！！！)。
+    5. 结尾【极其重要】：正文的最后间隔一行再另起一行，至少带5个相关热门标签，格式为 #标签1 #标签2 #标签3。
 
 
     【参考素材背景】：
