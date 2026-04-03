@@ -16,17 +16,17 @@ def run_job():
 def main():
     print("========================================")
     print("⏰ 小红书定时发布任务已启动")
-    print("⚙️  规则：立刻执行第一次，之后每 6 小时执行一次")
+    print("⚙️  规则：立刻执行第一次，之后每 12 小时执行一次")
     print("========================================")
     
-    interval_seconds = 6 * 60 * 60  # 6小时的秒数
+    interval_seconds = 12 * 60 * 60  # 12小时的秒数
     
     while True:
         run_job()
         
         # 计算下一次执行时间
         next_run = datetime.datetime.now() + datetime.timedelta(seconds=interval_seconds)
-        print(f"⏳ 等待 6 小时，下一次执行时间预计: {next_run.strftime('%Y-%m-%d %H:%M:%S')} ... (随时可Ctrl+C终止)")
+        print(f"⏳ 等待 12 小时，下一次执行时间预计: {next_run.strftime('%Y-%m-%d %H:%M:%S')} ... (随时可Ctrl+C终止)")
         
         try:
             time.sleep(interval_seconds)
