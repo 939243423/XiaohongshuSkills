@@ -1,20 +1,45 @@
 import re
 import os
-import time
 import random
 import json
 import subprocess
 import requests
-import glob
+import shutil
+import concurrent.futures
 import tkinter as tk
-from tkinter import messagebox, ttk # <--- 新增 ttk 用于表格展示
+from tkinter import messagebox, ttk
+from pathlib import Path
 from openai import OpenAI
-from PIL import Image, ImageDraw, ImageFont # <--- 新增 Pillow 用于写字
+from PIL import Image, ImageDraw, ImageFont
 
 # ================= 配置区 =================
-# 1. 密钥配置
-CA_KEY = "xxx"
-SILICON_KEY = "xxx"
+PROJECT_ROOT = Path(__file__).resolve().parent
+SCRIPTS_DIR = PROJECT_ROOT / "scripts"
+
+# 1. 密钥配置 (从环境变量或本地文件获取)
+def get_api_keys() -> tuple[str, str, str]:
+    ca_key = os.environ.get("CA_KEY", "")
+    sf_key = os.environ.get("SILICON_KEY", "")
+    dt_webhook = os.environ.get("DINGTALK_WEBHOOK", "")
+    
+    # 支持降级到从 accounts.json 里的某处读取，或者专门的 config
+    config_path = PROJECT_ROOT / "config" / "api_keys.json"
+    if config_path.exists():
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                config_data = json.load(f)
+                ca_key = ca_key or config_data.get("CA_KEY", "")
+                sf_key = sf_key or config_data.get("SILICON_KEY", "")
+                dt_webhook = dt_webhook or config_data.get("DINGTALK_WEBHOOK", "")
+        except Exception as e:
+            print(f"⚠️ 读取配置文件 {config_path} 失败: {e}")
+            
+    if not ca_key: ca_key = "xxx"
+    if not sf_key: sf_key = "xxx"
+    return ca_key, sf_key, dt_webhook
+
+CA_KEY, SILICON_KEY, DINGTALK_WEBHOOK = get_api_keys()
+
 SEARCH_LIMIT = 5                # 聚合前5条热门笔记的素材
 
 # 初始化客户端
@@ -24,11 +49,10 @@ sf_client = OpenAI(api_key=SILICON_KEY, base_url="https://api.siliconflow.cn/v1"
 # 2. 模型与生图配置
 CA_MODEL = "gpt-5"
 SF_TEXT_MODEL = "Pro/deepseek-ai/DeepSeek-V3.2"  
-IMAGE_MODEL = "Kwai-Kolors/Kolors" # 使用 Kolors 模型
+# IMAGE_MODEL = "Kwai-Kolors/Kolors" # 使用 Kolors 模型
+IMAGE_MODEL = "Qwen/Qwen-Image" # 使用 Qwen/Qwen-Image 模型
 
 # --- 核心新增：Pillow 字体配置 ---
-# 请确保该字体文件放在脚本同级目录下！
-# 例如: "AlibabaPuHuiTi-Medium.ttf" 或 "STXihei.ttf" (华文细黑)
 FONT_FILE = "AlibabaPuHuiTi-3-65-Medium.ttf" 
 # -------------------------------
 
@@ -87,43 +111,64 @@ APPLE_TOPICS_DICT = {
 
 APPLE_TOPICS = [topic for sublist in APPLE_TOPICS_DICT.values() for topic in sublist]
 
-# 随机选题
-SEARCH_KEYWORD = random.choice(APPLE_TOPICS)
+# --- 进阶反洗稿：防同质化的人设与情绪池 ---
+PERSONA_POOL = [
+    "被苹果 Bug 折磨的暴躁极客", 
+    "专给长辈写教程的耐心外甥", 
+    "只会用大白话解释的数码小白救星",
+    "十年果粉带一点小高冷的老玩家",
+    "省吃俭用热衷免费薅羊毛特性的打工人"
+]
+
+EMOTION_POOL = [
+    "开篇必须要吐槽一个痛点",
+    "开篇要表现得非常激动，觉得大家不知道太可惜了",
+    "开头要表现出对某些反人类交互设计感到非常无语",
+    "充满分享欲，像老朋友聊天一样自然引入"
+]
+# ---------------------------------------------
 
 # 4. 路径配置
-PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__)).replace('\\', '/')
-SCRIPTS_DIR = os.path.join(PROJECT_ROOT, "scripts")
-TEMP_IMG_DIR = os.path.join(PROJECT_ROOT, "temp_downloads")
-HISTORY_FILE = os.path.join(PROJECT_ROOT, "published_ids.txt")
+TEMP_IMG_DIR = PROJECT_ROOT / "temp_downloads"
+HISTORY_FILE = PROJECT_ROOT / "published_ids.txt"
 IMG_CROP_PIXELS = 2
 # ==========================================
 
-def get_history_ids():
-    if not os.path.exists(HISTORY_FILE): return set()
+def get_history_ids() -> set[str]:
+    if not HISTORY_FILE.exists(): return set()
     with open(HISTORY_FILE, "r", encoding="utf-8") as f:
         return set(line.strip() for line in f if line.strip())
 
-def save_history_id(f_id):
+def save_history_id(f_id: str) -> None:
     with open(HISTORY_FILE, "a", encoding="utf-8") as f:
         f.write(f"{f_id}\n")
 
-def run_cmd(cmd):
-    """正则解析命令行输出的 JSON"""
+def run_cmd(cmd: str, timeout: int = 60) -> dict | None:
+    """正则解析命令行输出的 JSON，包含超时机制"""
     try:
         process = subprocess.Popen(
             cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            cwd=SCRIPTS_DIR, universal_newlines=False
+            cwd=str(SCRIPTS_DIR), universal_newlines=False
         )
-        stdout_bytes, _ = process.communicate()
+        try:
+            stdout_bytes, stderr_bytes = process.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            stdout_bytes, stderr_bytes = process.communicate()
+            print(f"❌ [run_cmd] 执行超时 ({timeout}s): {cmd}")
+            return None
+        
         output = stdout_bytes.decode('utf-8', errors='ignore').strip()
         match = re.search(r'(\{.*\})', output, re.DOTALL)
         if match:
             try: return json.loads(match.group(1))
-            except: pass
+            except Exception as e: print(f"⚠️ [run_cmd] JSON解析失败: {e}")
         return None
-    except: return None
+    except Exception as e: 
+        print(f"❌ [run_cmd] 执行异常: {e}")
+        return None
 
-def show_confirm_box(title, content, timeout=0, default=True):
+def show_confirm_box(title: str, content: str, timeout: int = 0, default: bool = True) -> bool:
     """弹出 Yes/No 确认框, 支持超时默认"""
     root = tk.Tk()
     root.title(title)
@@ -180,7 +225,73 @@ def show_confirm_box(title, content, timeout=0, default=True):
     root.mainloop()
     return result[0]
 
-def show_selection_dialog(valid_feeds, timeout=0, default_index=0):
+def show_publish_review_box(title: str, content: str, timeout: int = 0, default_choice: str = 'yes') -> str:
+    """弹出发送/还原/取消三选一框，专门用于最终发布确认"""
+    root = tk.Tk()
+    root.title(title)
+    root.attributes("-topmost", True)
+    
+    window_width = 500
+    window_height = 180
+    screen_width = root.winfo_screenwidth()
+    screen_height = root.winfo_screenheight()
+    x_cordinate = int((screen_width/2) - (window_width/2))
+    y_cordinate = int((screen_height/2) - (window_height/2))
+    root.geometry(f"{window_width}x{window_height}+{x_cordinate}+{y_cordinate}")
+    
+    result = [default_choice]
+    
+    def on_yes():
+        result[0] = 'yes'
+        root.destroy()
+        
+    def on_no():
+        result[0] = 'no'
+        root.destroy()
+        
+    def on_cancel():
+        result[0] = 'cancel'
+        root.destroy()
+        
+    lbl = tk.Label(root, text=content, pady=20, padx=20)
+    lbl.pack()
+    
+    btn_frame = tk.Frame(root)
+    btn_frame.pack(pady=10)
+    
+    btn_yes = tk.Button(btn_frame, text="✅ 直接发布", width=15, bg="#4CAF50", fg="white", command=on_yes)
+    btn_yes.pack(side="left", padx=10)
+    
+    btn_no = tk.Button(btn_frame, text="🔄 改用原图发稿", width=15, bg="#FF9800", fg="white", command=on_no)
+    btn_no.pack(side="left", padx=10)
+    
+    btn_cancel = tk.Button(btn_frame, text="❌ 终止并清空垃圾", width=15, bg="#F44336", fg="white", command=on_cancel)
+    btn_cancel.pack(side="right", padx=10)
+
+    if timeout > 0:
+        def update_timer(left):
+            if left <= 0:
+                print(f"[{title}] 计时结束，使用默认选择: {default_choice}")
+                root.destroy()
+            else:
+                if default_choice == 'yes':
+                    btn_yes.config(text=f"✅ 直接发布 ({left}s)")
+                elif default_choice == 'no':
+                    btn_no.config(text=f"🔄 改用原图发稿 ({left}s)")
+                else:
+                    btn_cancel.config(text=f"❌ 终止并清空垃圾 ({left}s)")
+                root.after(1000, update_timer, left - 1)
+        root.after(1000, update_timer, timeout)
+
+    def on_closing():
+        result[0] = 'cancel' # 点X关闭窗口默认当作截断操作
+        root.destroy()
+    root.protocol("WM_DELETE_WINDOW", on_closing)
+
+    root.mainloop()
+    return result[0]
+
+def show_selection_dialog(valid_feeds: list[dict], search_keyword: str, timeout: int = 0, default_index: int = 0) -> int:
     """展示带有真实标题和正文预览的选择框"""
     root = tk.Tk()
     root.title("请选择核心对标笔记")
@@ -189,7 +300,7 @@ def show_selection_dialog(valid_feeds, timeout=0, default_index=0):
 
     selected_data = {"index": 0}
 
-    label = tk.Label(root, text=f"专题：{SEARCH_KEYWORD}\n请选择主素材来源（已获取详情内容）：", pady=10)
+    label = tk.Label(root, text=f"专题：{search_keyword}\n请选择主素材来源（已获取详情内容）：", pady=10)
     label.pack()
 
     columns = ("序号", "真实标题/内容预览", "笔记ID")
@@ -230,24 +341,25 @@ def show_selection_dialog(valid_feeds, timeout=0, default_index=0):
     root.mainloop()
     return selected_data["index"]
 
-def clean_temp_files():
+def clean_temp_files() -> None:
     """清理临时文件夹"""
     print("🧹 正在清理临时文件...")
-    files = glob.glob(os.path.join(TEMP_IMG_DIR, "*"))
-    for f in files:
-        try:
-            os.remove(f)
-        except:
-            pass
+    try:
+        if TEMP_IMG_DIR.exists():
+            shutil.rmtree(TEMP_IMG_DIR)
+        TEMP_IMG_DIR.mkdir(parents=True, exist_ok=True)
+    except Exception as e:
+        print(f"⚠️ 清理临时文件异常: {e}")
 
-def generate_silicon_pure_background():
+def generate_silicon_pure_background() -> str | None:
     """调用硅基流动生成具有系列化一致性的纯净、带Logo首图背景图"""
     print(f"🎨 硅基动力：正在生成系列化【首图背景】...")
     url = "https://api.siliconflow.cn/v1/images/generations"
     
-    # 数码生活桌面特写
+    # 极简排版图：禁止生成杂物和实体苹果 Logo，以防变成巨大的 3D 畸形物
+    # 强化指令：使用更强烈的约束语句防范文字在壁纸上析出，强制指定灵动岛形态
     refined_prompt = (
-        "竖版构图，9:16 比例。一张干净极简橡木桌子的中景特写。一台 iPhone 16 Pro 和一副 AirPods 整齐地摆放在中心。阳光透过窗户洒下，在桌面和设备上形成错综美观的斑驳叶影。高端生活方式摄影，浅景深，背景优美模糊。温馨、宁静、治愈的氛围。中性色调，8k 分辨率，照片级真实，电影级光影，无文字，画面极其干净且有呼吸感，留有大量留白。"
+        "竖版构图，9:16比例。极简排版优质海报底板。纯粹甚至有点偏白的极简浅灰背景幕布。画面最正中央完全对称放置一部极其逼真的最新款 iPhone 手机正面超大特写。重点要求细节：1. 手机屏幕顶部必须是无边框加黑色药丸状的『灵动岛(Dynamic Island)』，绝对不准画古老的刘海！2. 屏幕内满屏显示一张色彩明艳可爱的卡通萌物壁纸。3. 屏幕内外【绝对不可生成】任何英文字符、数字（如iPhone 16 Pro）或汉字！这是严重错误！整个画面必须只有一部手机，绝对不要多余的苹果、水果或杂物摆件。"
     )
     # ----------------------------------------
     
@@ -268,90 +380,229 @@ def generate_silicon_pure_background():
         print(f"⚠️ 绘图异常: {e}")
     return None
 
-def pillow_add_text_to_image(image_path, text_content):
-    """使用 Pillow 库将标题精准印在图片正中央"""
-    print(f"✍️ Pillow 增强：正在首图合成标题【{text_content}】...")
+def pillow_add_text_to_image(image_path: str, title: str) -> bool:
+    """使用 Pillow 库提升排版风格：加入阴影与主副标拆分"""
+    print(f"✍️ Pillow 进阶版：正在首图刻制高级版式...")
     
     try:
-        # 1. 打开图片
         img = Image.open(image_path)
         if img.mode != 'RGB': img = img.convert('RGB')
         draw = ImageDraw.Draw(img)
         width, height = img.size
 
-        # 2. 加载字体 (如果加载失败，降级使用默认字体)
-        font_path = os.path.join(PROJECT_ROOT, FONT_FILE)
+        font_path = str(PROJECT_ROOT / FONT_FILE)
         if not os.path.exists(font_path):
-            print(f"⚠️ 未找到字体文件 {FONT_FILE}，将使用系统默认字体（可能不好看）")
-            font = ImageFont.load_default()
-            font_size = 40
+            print(f"⚠️ 未找到字体文件 {FONT_FILE}，将使用系统默认字体")
+            font_main = ImageFont.load_default()
+            font_sub = ImageFont.load_default()
         else:
-            # 根据图片宽度动态计算字体大小 (取图片宽度的 1/15)
-            font_size = int(width / 15)
-            # 限制标题字数，防止过长超出
-            clean_text = text_content[:15] 
-            font = ImageFont.truetype(font_path, font_size)
+            font_main = ImageFont.truetype(font_path, int(width / 12))
+            font_sub = ImageFont.truetype(font_path, int(width / 25))
 
-        # 3. 计算文字位置使其居中
-        # Pillow 10+ 建议使用 getbbox
+        # 严格清洗掉 Emoji 等字体不支持的特殊拓展符号，防止出现 []
+        clean_text_full = re.sub(r'[^\w\s\u4e00-\u9fa5，。！？、：；（）【】《》“”‘’+\-*\/\!]', '', title).strip()
+        if not clean_text_full:
+            clean_text_full = "苹果实用技巧分享"
+            
+        # 移除原有的 18 字硬性截断，改成宽松容量，交由下方的自适应缩放算法保证不溢出
+        clean_text_full = clean_text_full[:36] 
+
+        def smart_split(text):
+            if len(text) <= 7: return [text]
+            # 优先按照标点折行
+            for p in ['？', '！', '，', '。', '、', '：', ' ', '?', '!']:
+                if p in text and 3 <= text.index(p) <= len(text) - 2:
+                    idx = text.index(p)
+                    # 保留标点在第一行
+                    return [text[:idx+1].strip(), text[idx+1:].strip()]
+            # 其次查找中英文边界折行 (防止 iPhone信 被强行劈开)
+            mid_range = range(max(1, len(text)//2 - 3), min(len(text)-1, len(text)//2 + 3))
+            for i in mid_range:
+                if (ord(text[i]) < 128 and ord(text[i+1]) >= 128) or (ord(text[i]) >= 128 and ord(text[i+1]) < 128):
+                    return [text[:i+1].strip(), text[i+1:].strip()]
+            # 兜底强制中分
+            mid = len(text) // 2
+            return [text[:mid].strip(), text[mid:].strip()]
+
+        lines = smart_split(clean_text_full)
+
+        # 动态估算每一行的物理显示占比（汉字占1个单位，英文占0.55个单位）
+        def get_display_width(text):
+            return sum(1 if '\u4e00' <= char <= '\u9fa5' else 0.55 for char in text)
+        
+        max_display_width = max(max([get_display_width(line) for line in lines]), 1)
+        # 根据该行最多字符动态打回字号：最高不越过图片宽度 85%，防过密防截断
+        font_size = max(20, min(int(width / 5.0), int((width * 0.85) / max_display_width)))
+
         try:
-            left, top, right, bottom = draw.textbbox((0, 0), clean_text, font=font)
-            text_width = right - left
-            text_height = bottom - top
+            font_main = ImageFont.truetype(font_path, font_size)
+        except Exception:
+            font_main = ImageFont.load_default()
+
+        line_heights = []
+        line_widths = []
+        for line in lines:
+            try:
+                left, top, right, bottom = draw.textbbox((0, 0), line, font=font_main)
+                line_widths.append(right - left)
+                line_heights.append(bottom - top)
+            except:
+                w, h = draw.textsize(line, font=font_main)
+                line_widths.append(w)
+                line_heights.append(h)
+                
+        # 稍微拉开行距，避免两行文字的厚描边互相打架糊成一团
+        line_spacing = int(font_size * 0.25)
+        total_height = sum(line_heights) + line_spacing * (len(lines) - 1)
+        
+        # 【核心排版进阶】：彻底放弃中央居中，将标题坐标硬性抬升至画面顶端距离顶部 10%~12% 处
+        # 目的：将最引人注目的中间大片区域彻底让位给手机和壁纸本体
+        start_y = height * 0.11 
+        
+        # 进一步调细描边厚度，还原图二清爽的视觉感 (描边比例降至 1/14)
+        stroke_width = max(2, int(font_size / 14))
+        current_y = start_y
+        
+        # 纯白大字，黑色描边，高度还原参考图且防止文字粘连
+        for i, line in enumerate(lines):
+            x = (width - line_widths[i]) / 2
+            try:
+                draw.text((x, current_y), line, font=font_main, fill=(255, 255, 255), 
+                          stroke_width=stroke_width, stroke_fill=(0, 0, 0))
+            except TypeError:
+                # 降级模拟法
+                for dx in range(-stroke_width, stroke_width + 1):
+                    for dy in range(-stroke_width, stroke_width + 1):
+                        if dx != 0 or dy != 0:
+                            draw.text((x + dx, current_y + dy), line, font=font_main, fill=(0, 0, 0))
+                draw.text((x, current_y), line, font=font_main, fill=(255, 255, 255))
+            current_y += line_heights[i] + line_spacing
+
+        # 底部精致小水印：包含官方矢量苹果黑标与黑色水印文字，添加白色细微发光底防杂色
+        try:
+            # 字体调小
+            font_sub = ImageFont.truetype(font_path, int(width / 35))
         except:
-            # 兼容老版本 Pillow
-            text_width, text_height = draw.textsize(clean_text, font=font)
+            font_sub = ImageFont.load_default()
+            
+        watermark = "IOS 技巧分享"
+        try:
+            w_left, w_top, w_right, w_bottom = draw.textbbox((0, 0), watermark, font=font_sub)
+            w_w = w_right - w_left
+            w_h = w_bottom - w_top
+        except:
+            w_w, w_h = draw.textsize(watermark, font_sub)
+            w_top = 0
+            
+        icon_size = int(w_h * 1.3)
+        total_w = w_w + icon_size + 12
+        start_x = (width - total_w) / 2
+        w_y = height - w_h - (height * 0.04) # 逼近底边
 
-        x = (width - text_width) / 2
-        y = (height - text_height) / 2 - (height / 10) # 稍微往上偏一点点，视觉更好
+        # 加载苹果Logo图
+        logo_path = PROJECT_ROOT / "apple_logo.png"
+        if not logo_path.exists():
+            try:
+                r = requests.get("https://img.icons8.com/ios-filled/100/000000/mac-os.png", timeout=5)
+                if r.status_code == 200:
+                    with open(logo_path, "wb") as f: f.write(r.content)
+            except: pass
+            
+        if logo_path.exists():
+            try:
+                logo_img = Image.open(logo_path).convert("RGBA")
+                logo_img = logo_img.resize((icon_size, icon_size), Image.Resampling.LANCZOS)
+                # 计算精确绝对垂直居中，消除字体排版框本身的内部偏置造成的错位
+                center_y = w_y + w_top + (w_h / 2)
+                icon_y = int(center_y - (icon_size / 2))
+                img.paste(logo_img, (int(start_x), icon_y), mask=logo_img)
+            except Exception as e:
+                print("水印Logo绘制失败:", e)
+                
+        # 黑色水印，白底描边增强对比可读性
+        try:
+            draw.text((start_x + icon_size + 12, w_y), watermark, font=font_sub, fill=(0, 0, 0), stroke_width=2, stroke_fill=(255, 255, 255))
+        except TypeError:
+            draw.text((start_x + icon_size + 12, w_y), watermark, font=font_sub, fill=(0, 0, 0))
 
-        # 4. 绘制文字 (黑色)
-        draw.text((x, y), clean_text, font=font, fill=(0, 0, 0)) # 黑字
-
-        # 5. 保存覆盖
         img.save(image_path, quality=95)
         return True
     except Exception as e:
-        print(f"❌ Pillow 合成失败: {e}")
+        print(f"❌ Pillow 进阶版排版失败: {e}")
         return False
 
-def download_and_process_image(url, index, is_ai=False):
-    if not os.path.exists(TEMP_IMG_DIR): os.makedirs(TEMP_IMG_DIR)
-    path = os.path.join(TEMP_IMG_DIR, f"img_{index}.jpg")
+def download_and_process_image(url: str, index: int, is_ai: bool = False) -> str | None:
+    TEMP_IMG_DIR.mkdir(parents=True, exist_ok=True)
+    path = TEMP_IMG_DIR / f"img_{index}.jpg"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
     try:
-        r = requests.get(url, timeout=20)
-        if r.status_code == 200:
-            with open(path, 'wb') as f: f.write(r.content)
-            with Image.open(path) as img:
-                if img.mode != 'RGB': img = img.convert('RGB')
-                if not is_ai: # 原图裁剪去指纹
-                    w, h = img.size
-                    img = img.crop((IMG_CROP_PIXELS, IMG_CROP_PIXELS, w-IMG_CROP_PIXELS, h-IMG_CROP_PIXELS))
-                img.save(path, quality=95)
-            return os.path.abspath(path)
-    except: pass
-    return None
+        r = requests.get(url, headers=headers, timeout=20)
+        r.raise_for_status()
+        with open(path, 'wb') as f: f.write(r.content)
+        with Image.open(path) as img:
+            if img.mode != 'RGB': img = img.convert('RGB')
+            if not is_ai: # 原图裁剪去指纹
+                w, h = img.size
+                img = img.crop((IMG_CROP_PIXELS, IMG_CROP_PIXELS, w-IMG_CROP_PIXELS, h-IMG_CROP_PIXELS))
+            img.save(path, quality=95)
+        return str(path.resolve())
+    except Exception as e: 
+        print(f"⚠️ 下载图片 {index} 失败: {e}")
+        return None
 
-def ai_create_content(materials):
-    """文案创作：强力洗稿+爆款重塑"""
-    combined_raw = "\n---\n".join([f"参考素材: {m}" for m in materials])
+def send_dingtalk_msg(title: str, content: str, img_url: str = None) -> None:
+    """推送到钉钉机器人，实现远程无人值守的进度播报"""
+    if not DINGTALK_WEBHOOK:
+        return
+    headers = {'Content-Type': 'application/json'}
+    preview_content = content[:150] + "..." if len(content) > 150 else content
+    
+    markdown_text = f"### 🤖 小红书自动化：待发布审核\n\n**📝 文案标题**：\n{title}\n\n**📄 内容预览**：\n{preview_content}\n\n"
+    if img_url:
+        markdown_text += f"**🖼️ 首图底板预览**：\n![]({img_url})\n\n"
+        
+    markdown_text += "> 💡 **提示**：系统已进入 15 分钟等候期。如您不打断，系统将在超时后『自动默许发布全网』！如需重做请立刻关停脚本。"
+
+    payload = {
+        "msgtype": "markdown",
+        "markdown": {
+            "title": "小红书待发布审核通知", # 这里面带有"审核"和"通知"等词，可以在群机器人设置安全关键词时使用
+            "text": markdown_text
+        }
+    }
+    try:
+        requests.post(DINGTALK_WEBHOOK, json=payload, headers=headers, timeout=10)
+        print("📨 已成功投递钉钉机器人通知！")
+    except Exception as e:
+        print(f"⚠️ 钉钉群推送异常: {e}")
+
+def ai_create_content(materials: list[str], search_keyword: str) -> dict | None:
+    """文案创作：多源缝合+人设情绪注入"""
+    combined_raw = "\n---\n".join(materials)
+    persona = random.choice(PERSONA_POOL)
+    emotion = random.choice(EMOTION_POOL)
     
     # --- 核心改进：加强洗稿约束 ---
     prompt = f"""
-    你现在是小红书百万粉丝的【苹果数码博主】。请针对专题【{SEARCH_KEYWORD}】进行二次创作。
+    你现在是小红书百万粉丝的【苹果数码博主】。
+    你的人设是：【{persona}】
+    你的开场情绪基调：【{emotion}】
+    
+    请结合下面提供的多篇不同视角的参考资料以及真实用户评论反馈，针对专题【{search_keyword}】进行原创内容缝合创作。
     
     【强制要求】：
-    1. 严禁原样照抄素材内容！必须用你专业且略带幽默的口吻重新组织语言。
-    2. 结构重塑：提取素材中的干货核心，转化为更易读的保姆级教程。
+    1. 必须完全符合分配给你的人设和基调。结合基调表达你的情绪，严禁生硬。严禁使用过度的烂大街口癖如“家人们”、“绝绝子”。
+    2. 结构缝合：融合各篇干货。如果有给出“评论区的痛点反馈”，你【必须】在文中以自问自答或避坑提示的形式解答出来！
     3. 视觉引导：正文分点必须带Emoji数字（1️⃣, 2️⃣...），每段话最多不超过100字，保持呼吸感。
-    4. 标题要求：必须是标题党！标题总字数算上表情符号一定要在20字内(不然会发不出去！！！)。
+    4. 标题要求：爆款标题党！总字数算上表情符号一定要在20字内。
     5. 结尾【极其重要】：正文的最后间隔一行再另起一行，至少带5个相关热门标签，格式为 #标签1 #标签2 #标签3。
 
-
-    【参考素材背景】：
+    【海量参考资料及评论反馈池】：
     {combined_raw}
 
-    请输出严格的 JSON 格式：{{"title": "...", "content": "..."}}
+    请严格返回符合 JSON 格式：{{"title": "...", "content": "..."}}
     """
     # ---------------------------
     
@@ -373,16 +624,20 @@ def ai_create_content(materials):
                 response_format={ "type": "json_object" }
             )
             return json.loads(response.choices[0].message.content)
-        except:
-            print("❌ 文案双线全部失败。")
+        except Exception as e:
+            print(f"❌ 文案双线全部失败: {e}")
             return None
 
-def main_workflow():
-    print(f"🚀 === 任务启动 | 今日选题：{SEARCH_KEYWORD} ===")
+def main_workflow() -> None:
+    # 每次运行前强行清空历史残留的临时物料
+    clean_temp_files()
+    
+    search_keyword = random.choice(APPLE_TOPICS)
+    print(f"🚀 === 任务启动 | 今日选题：{search_keyword} ===")
     history_ids = get_history_ids()
 
     # 1. 搜索
-    results = run_cmd(f'python cdp_publish.py --reuse-existing-tab search-feeds --keyword "{SEARCH_KEYWORD}" --sort-by 最多点赞 --note-type 图文')
+    results = run_cmd(f'python cdp_publish.py --reuse-existing-tab search-feeds --keyword "{search_keyword}" --sort-by 最多点赞 --note-type 图文')
     if not results or 'feeds' not in results:
         print("❌ 搜索失败。"); return
 
@@ -393,34 +648,58 @@ def main_workflow():
     
     for f in unposted_raw[:SEARCH_LIMIT]:
         f_id = f.get('id')
-        res = run_cmd(f'python cdp_publish.py --reuse-existing-tab get-feed-detail --feed-id "{f_id}" --xsec-token "{f.get("xsecToken")}"')
+        # 加上 --load-all-comments 抓取评论痛点
+        res = run_cmd(f'python cdp_publish.py --reuse-existing-tab get-feed-detail --feed-id "{f_id}" --xsec-token "{f.get("xsecToken")}" --load-all-comments')
         if res and 'detail' in res and 'note' in res['detail']:
             note = res['detail']['note']
+            
+            # 兼容处理 comments 可能为 dict 的情况
+            comments_data = res['detail'].get('comments', [])
+            if isinstance(comments_data, dict):
+                comments_list = comments_data.get('comments', []) or comments_data.get('list', [])
+            elif isinstance(comments_data, list):
+                comments_list = comments_data
+            else:
+                comments_list = []
+                
             title = note.get('title', '').strip()
             desc = note.get('desc', '').strip()
-            # 清洗预览文字
             display_text = title if title else desc.replace('\n', ' ')[:60]
+            
+            # 提取前 5 条有效评论作为用户痛点反馈
+            top_comments = [c.get('content', '').replace('\n', ' ') for c in comments_list[:5] if isinstance(c, dict) and c.get('content')]
+            
             valid_feeds.append({
                 'id': f_id,
                 'note': note,
-                'display_text': display_text
+                'display_text': display_text,
+                'top_comments': top_comments
             })
 
     if not valid_feeds:
         print("⚠️ 专题已发过或无素材。"); return
     
     # --- 核心交互：展示抓取后的真实内容进行选择 ---
-    selected_idx = show_selection_dialog(valid_feeds, timeout=20, default_index=0)
+    selected_idx = show_selection_dialog(valid_feeds, search_keyword, timeout=20, default_index=0)
     target_data = valid_feeds[selected_idx]
     main_id = target_data['id']
     main_note = target_data['note']
     print(f"🎯 选定目标: {main_id} | {target_data['display_text']}")
 
-    # 3. 整理素材
-    materials = [f"标题: {main_note.get('title')}\n内容: {main_note.get('desc')}"]
+    # 3. 整理多源缝合素材
+    materials = []
+    # 主核心
+    materials.append(f"【核心图文对标】\n标题: {main_note.get('title')}\n正文: {main_note.get('desc')}")
+    if target_data.get('top_comments'):
+         materials.append(f"【核心痛点反馈】该条笔记评论区的真实疑问或吐槽: {', '.join(target_data['top_comments'])}")
+    
+    # 补充素材视角（缝合剩余几条好的笔记和它们的评论）
+    for i, feed in enumerate(valid_feeds[:3]):
+        if i != selected_idx:
+            materials.append(f"【补充视角参考 {i}】标题: {feed['note'].get('title')} | 摘要: {feed['note'].get('desc')[:100]}...\n【该话题其他评论反馈】: {', '.join(feed.get('top_comments', [])[:3])}")
     
     # 4. 文案合成
-    new_post = ai_create_content(materials)
+    new_post = ai_create_content(materials, search_keyword)
     if not new_post: return
 
     # 5. 提取图片
@@ -438,21 +717,26 @@ def main_workflow():
     if pure_bg_url:
         p_path = download_and_process_image(pure_bg_url, 0, is_ai=True)
         if p_path:
-            # --- 修改：暂时不用 Pillow 在首图印字 ---
-            # if pillow_add_text_to_image(p_path, new_post['title']):
-            #     processed_imgs.append(p_path)
-            #     ai_cover_success = True
-            
-            # 直接使用纯净 AI 背景图作为首图
-            processed_imgs.append(p_path)
-            ai_cover_success = True
+            # 重新启用并升级了 Pillow 高级排版印字
+            if pillow_add_text_to_image(p_path, new_post['title']):
+                processed_imgs.append(p_path)
+                ai_cover_success = True
+            else:
+                # 即使加字失败也用纯背景图托底
+                processed_imgs.append(p_path)
+                ai_cover_success = True
 
-    # --- 步骤 B：后续步骤直接下载原图图集 (除第一张外) ---
+    # --- 步骤 B：后续步骤直接下载原图图集 (除第一张外，且采用多线程并发下载) ---
     if original_images and len(original_images) > 1:
-        print(f"📸 正在下载原笔记步骤图集 (第2-{len(original_images)}张)...")
-        for idx, url in enumerate(original_images[1:]): 
-            p = download_and_process_image(url, idx + 1, is_ai=False)
-            if p: processed_imgs.append(p)
+        print(f"📸 正在并发下载原笔记步骤图集 (第2-{len(original_images)}张)...")
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+            futures = [
+                executor.submit(download_and_process_image, url, idx + 1, False)
+                for idx, url in enumerate(original_images[1:])
+            ]
+            for future in concurrent.futures.as_completed(futures):
+                p = future.result()
+                if p: processed_imgs.append(p)
 
     # 7. 人机审核
     if not ai_cover_success:
@@ -467,11 +751,26 @@ def main_workflow():
             p = download_and_process_image(original_images[0], 0, is_ai=False)
             if p: processed_imgs.insert(0, p) # 插入到最前面
     else:
-        print("🔍 首图海报合成成功，等待用户审核...")
-        print(f"📝 标题预览: {new_post['title']}")
-        # --- 修改：审核提示词更新，仅审核背景和 Logo 质量 ---
-        if not show_confirm_box("🖼️ 审核首图系列感", f"专题：{SEARCH_KEYWORD}\nAI已生成系列化画册风背景（不带字）。\n满意质感并发布吗（不满意将改用原笔记第一张图）？", timeout=20, default=False):
-            print("⚠️ 用户对首图质感不满意，改用原笔记第一张图...")
+        print("🔍 首图海报合成成功，等待远程或本机的最终防干扰审核...")
+        
+        # 核心：触发钉钉远程投递（展示标题、大纲摘要和公网上的AI底图图床）
+        send_dingtalk_msg(new_post['title'], new_post['content'], pure_bg_url)
+        
+        # 本机审核：弹出 3选1 发车确认框，超时15分钟后默认自动发车
+        user_choice = show_publish_review_box(
+            "🖼️ 最终发车确认", 
+            f"专题：{search_keyword}\nAI 图文已生成并推送到您的钉钉。\n若 15 分钟内无任何操作打断，系统将按照您的预设自动起盘发表。\n\n如对稿件内容极度不满意，可点击【红键】强行终止并清场。", 
+            timeout=900, 
+            default_choice='yes'
+        )
+        
+        if user_choice == 'cancel':
+            print("🛑 用户手动打断，中止本次发布流程，深度清理临时物料池...")
+            clean_temp_files()
+            return
+            
+        elif user_choice == 'no':
+            print("⚠️ 审核由于海报打回：舍弃所生成的封面，正文保留并使用原作者第一图直接发版...")
             if original_images:
                 p = download_and_process_image(original_images[0], 0, is_ai=False)
                 if p and processed_imgs:
@@ -480,7 +779,7 @@ def main_workflow():
     # 8. 发布
     if not processed_imgs: return
     print(f"📝 准备发布原创作品: {new_post['title']}")
-    content_file = os.path.join(TEMP_IMG_DIR, "post.txt")
+    content_file = TEMP_IMG_DIR / "post.txt"
     with open(content_file, "w", encoding="utf-8") as f: f.write(new_post["content"])
     
     # 重新排序确保顺序正确 img_0, img_1...
@@ -489,13 +788,13 @@ def main_workflow():
     imgs_arg = " ".join([f'"{p}"' for p in sorted_imgs])
     publish_cmd = (
         f'python publish_pipeline.py --reuse-existing-tab --auto-publish '
-        f'--title "{new_post["title"]}" --content-file "{os.path.abspath(content_file)}" --images {imgs_arg}'
+        f'--title "{new_post["title"]}" --content-file "{str(content_file.resolve())}" --images {imgs_arg}'
     )
     run_cmd(publish_cmd)
 
     # 9. 善后
     save_history_id(main_id)
-    print(f"✅ 【{SEARCH_KEYWORD}】发布完成！")
+    print(f"✅ 【{search_keyword}】发布完成！")
     # 清理临时文件
     clean_temp_files()
 
