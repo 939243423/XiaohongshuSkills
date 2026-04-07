@@ -351,22 +351,48 @@ def clean_temp_files() -> None:
     except Exception as e:
         print(f"⚠️ 清理临时文件异常: {e}")
 
-def generate_silicon_pure_background() -> str | None:
-    """调用硅基流动生成具有系列化一致性的纯净、带Logo首图背景图"""
-    print(f"🎨 硅基动力：正在生成系列化【首图背景】...")
+def generate_silicon_pure_background(theme: str) -> str | None:
+    """调用大模型动态构思生图Prompt，并调用硅基流动生成首图底版"""
+    print(f"🎨 硅基动力：正在通过 AI 引擎动态构思【无限创意的首图底版】...")
     url = "https://api.siliconflow.cn/v1/images/generations"
     
-    # 极简排版图：禁止生成杂物和实体苹果 Logo，以防变成巨大的 3D 畸形物
-    # 强化指令：使用更强烈的约束语句防范文字在壁纸上析出，强制指定灵动岛形态
-    refined_prompt = (
-        "竖版构图，9:16比例，极简高质感底图。纯洁干净的浅灰色背景幕布。正中央完全对称放置一部新款智能手机的正面高清大特写，手机主体极大，精确占据整个画面高度的75%，宽高比为9:19.5，为上下方留出完美的留白排版空间。手机屏幕的最顶部有标志性的极窄黑色药丸形状灵动岛。手机屏幕内全屏展示着一幅色彩明艳可爱的卡通萌物壁纸。影棚级明亮柔和的光线，画面极度干净、纯粹、几何对称感极强。"
-    )
-    # ----------------------------------------
+    # 使用大模型脑爆一个千变万化的 prompt，让每次生成都完全不一样
+    prompt_brainstorm = f"""
+    你需要为一篇关于苹果数码技巧（核心主题：【{theme}】）的小红书图文笔记，设计一张极具视觉冲击力的封面底图。
+    该底图将用于中央或上方排版白色/黑色大字，因此画面必须满足【大量留白或干净的背景层】，严禁出现杂乱元素干扰文字阅读。
+
+    我们要突破想象力，彻底告别千篇一律的“正中央放个手机”。你要在这个庞大的风格库中随机汲取灵感（可以融合）：
+    - 极简抽象几何（悬浮的磨砂亚克力、极光流体、液态金属）
+    - 赛博科技风（霓虹光束、暗黑代码矩阵、光纤虚化）
+    - 治愈办公/生活风（原木桌面一角、咖啡边缘、树影打在极简墙面上）
+    - 超现实自然（悬浮在水面的发光苹果Logo、极简渐变色天空）
+    - UI与视差图（毛玻璃视差特效、拟物化放大层）
+    - （带手机特写的传统图仅占极少概率，你大概率不应以手机作为最主要占据全屏的主体）
+
+    严格要求：
+    只输出一段极度具体、画面感极强的中文图像描述（作为 Midjourney 即时生图的 Prompt），不要超过 150 个字。严禁包含任何“好的”、“为你提供”等废话。
+    必须包含画面主体、材质、光影效果（如影棚级光线、丁达尔光等）。
+    """
+    
+    try:
+        res = sf_client.chat.completions.create(
+            model=SF_TEXT_MODEL,
+            messages=[{"role": "user", "content": prompt_brainstorm}],
+            temperature=0.9
+        )
+        ai_generated_prompt = res.choices[0].message.content.strip()
+    except Exception as e:
+        print(f"⚠️ 动态 prompt 生成失败，降级为经典手机特写底图: {e}")
+        ai_generated_prompt = "极简高质感底图。正中央完全对称放置一部新款智能手机的正面高清大特写，手机主体极大，精确占据整个画面高度的75%，宽高比为9:19.5，为上下方留出完美的留白排版空间。手机屏幕的最顶部有标志性的极窄黑色药丸形状灵动岛。手机屏幕内全屏展示着色彩明艳可爱的卡通萌物壁纸。影棚级明亮柔和的光线，画面极度干净、纯粹、几何对称感极强。"
+
+    refined_prompt = f"竖向构图。{ai_generated_prompt}。8K分辨率，杰作，极简高级质感，纯净无杂物，绝对完美的留白排版空间。"
+    print(f"✨ 本次抽签生成的盲盒底图 Prompt: {refined_prompt}")
+    
     
     payload = {
         "model": IMAGE_MODEL,
         "prompt": refined_prompt,
-        "size": "1024x1024",
+        "size": "720x1280",
         "num_inference_steps": 25 # Kolors建议步数，确保细节
     }
     headers = {"Authorization": f"Bearer {SILICON_KEY}", "Content-Type": "application/json"}
@@ -597,12 +623,13 @@ def ai_create_content(materials: list[str], search_keyword: str) -> dict | None:
     2. 结构缝合：融合各篇干货。如果有给出“评论区的痛点反馈”，你【必须】在文中以自问自答或避坑提示的形式解答出来！
     3. 视觉引导：正文分点必须带Emoji数字（1️⃣, 2️⃣...），每段话最多不超过100字，保持呼吸感。
     4. 标题要求：爆款标题党！总字数算上表情符号一定要在20字内。
-    5. 结尾【极其重要】：正文的最后间隔一行再另起一行，至少带5个相关热门标签，格式为 #标签1 #标签2 #标签3。
+    5. 封面短标题：根据标题进一步凝练出一个用于图片封面的极简短语（必须控制在10个字以内，最能一击即中痛点，不带任何表情符号，要有强烈的视觉冲击力）。
+    6. 结尾【极其重要】：正文的最后间隔一行再另起一行，至少带5个相关热门标签，格式为 #标签1 #标签2 #标签3。
 
     【海量参考资料及评论反馈池】：
     {combined_raw}
 
-    请严格返回符合 JSON 格式：{{"title": "...", "content": "..."}}
+    请严格返回符合 JSON 格式：{{"title": "...", "cover_title": "...", "content": "..."}}
     """
     # ---------------------------
     
@@ -632,7 +659,34 @@ def main_workflow() -> None:
     # 每次运行前强行清空历史残留的临时物料
     clean_temp_files()
     
-    search_keyword = random.choice(APPLE_TOPICS)
+    # --- 核心改进：大模型动态延伸选题 ---
+    print("🧠 正在通过大模型脑爆无限新选题...")
+    try:
+        sample_topics = random.sample(APPLE_TOPICS, 10)
+        topic_prompt = f"""
+        你是一个资深的苹果数码博主。请你想出一个【绝佳的、极具痛点和吸引力】的小红书苹果/iOS使用技巧选题。
+        你可以参考以下已有的选题框架提取灵感，但【必须输出一个全新、独特、高度垂直】的新鲜选题：
+        参考框架：{sample_topics}
+        
+        严格要求：
+        1. 只输出选题的核心短语（控制在12个字以内，例如：iPhone快捷视频提取、iPad分屏效率神器等）。
+        2. 严禁包含任何标点符号、解释性语句或废话。
+        """
+        topic_res = sf_client.chat.completions.create(
+            model=SF_TEXT_MODEL,
+            messages=[{"role": "user", "content": topic_prompt}],
+            temperature=0.8
+        )
+        search_keyword = topic_res.choices[0].message.content.strip()
+        search_keyword = re.sub(r'[^\w\u4e00-\u9fa5]', '', search_keyword)
+        if not search_keyword:
+            raise ValueError("生成选题为空")
+        print(f"🌟 AI无尽选题引擎生成了全新选题: {search_keyword}")
+    except Exception as e:
+        print(f"⚠️ AI选题生成失败，降级使用本地经典题库 ({e})")
+        search_keyword = random.choice(APPLE_TOPICS)
+    # ----------------------------------------
+    
     print(f"🚀 === 任务启动 | 今日选题：{search_keyword} ===")
     history_ids = get_history_ids()
 
@@ -713,12 +767,13 @@ def main_workflow() -> None:
     ai_cover_success = False
 
     # --- 步骤 A：AI 生成纯净首图背景 (已根据系列化需求替换 Prompt) ---
-    pure_bg_url = generate_silicon_pure_background()
+    cover_title = new_post.get('cover_title', new_post['title'])
+    pure_bg_url = generate_silicon_pure_background(theme=cover_title)
     if pure_bg_url:
         p_path = download_and_process_image(pure_bg_url, 0, is_ai=True)
         if p_path:
             # 重新启用并升级了 Pillow 高级排版印字
-            if pillow_add_text_to_image(p_path, new_post['title']):
+            if pillow_add_text_to_image(p_path, cover_title):
                 processed_imgs.append(p_path)
                 ai_cover_success = True
             else:
