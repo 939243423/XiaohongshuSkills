@@ -58,7 +58,7 @@ python xhs_robot_final.py
 ```powershell
 python run_scheduler.py
 ```
-*调度器会始终保持运行，并按照预设的时间间隔（6小时）自动循环。*
+*调度器会始终保持运行，并按照预设的时间间隔（12小时）自动循环。*
 
 ---
 

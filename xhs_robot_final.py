@@ -132,6 +132,7 @@ EMOTION_POOL = [
 TEMP_IMG_DIR = PROJECT_ROOT / "temp_downloads"
 HISTORY_FILE = PROJECT_ROOT / "published_ids.txt"
 IMG_CROP_PIXELS = 2
+USE_HEADLESS = True             # 是否使用无头模式运行浏览器
 # ==========================================
 
 def get_history_ids() -> set[str]:
@@ -361,18 +362,23 @@ def generate_silicon_pure_background(theme: str) -> str | None:
     你需要为一篇关于苹果数码技巧（核心主题：【{theme}】）的小红书图文笔记，设计一张极具视觉冲击力的封面底图。
     该底图将用于中央或上方排版白色/黑色大字，因此画面必须满足【大量留白或干净的背景层】，严禁出现杂乱元素干扰文字阅读。
 
-    我们要突破想象力，但【核心视觉元素或氛围必须与苹果（Apple/iOS）及主题“{theme}”紧密相关】。
-    你可以从以下风格中随机汲取灵感（可以融合）：
-    - 苹果官方极简风（丝滑的磨砂铝合金材质、精细的边缘倒角、镜头玻璃的折射感）
-    - 创意UI隐喻（将“{theme}”中的操作逻辑转化为唯美的悬浮毛玻璃卡片、发光的控制轴或丝滑的动画定格）
-    - 治愈系数码生活（晨光下的干净桌面、一杯咖啡配上精致的iPad/iPhone局部、光影在墙面形成的苹果Logo轮廓）
-    - 抽象材质流体（采用苹果品牌色如太空灰、星光色、深夜色，展现极具呼吸感的流动金属或丝绒感光影）
-    - 赛博光束（极细的激光勾勒出智能设备的轮廓，光线流转暗示数据计算）
+    我们要突破想象力，但【核心视觉元素必须与“{theme}”紧密相关】。
+    
+    任务逻辑：
+    1. 识别主题【{theme}】中的核心实体（如：iPhone, Apple Watch, AirPods, MacBook, iPad, 或特定的软件功能界面）。
+    2. 如果主题涉及特定硬件（如手表、耳机），画面主角必须是该硬件，严禁千篇一律地使用手机。
+    3. 如果主题涉及特定操作（如洗手、听歌、拍照、充电），请在画面中加入具象的、高质感的环境暗示（如：晶莹的水滴、跳动的声波、柔和的光晕、编织质感的充电线）。
+    
+    推荐风格示例（随机选择或融合）：
+    - 【写实产品艺术】：极致细节的硬件特写（镜头玻璃的反射、拉丝金属的质感），配合丁达尔光影，营造高端商业摄影感。
+    - 【C4D 场景模拟】：将硬件置于超现实的纯净空间，周围点缀着与主题相关的 3D 抽象元素（如悬浮的海带状波纹、极简的几何发光体）。
+    - 【治愈数码生活】：极简、高亮度的干净桌面桌面局部，光线透过窗帘撒在设备上，画面纯净有呼吸感。
+    - 【未来主义光效】：用细微的荧光线条勾勒出设备的轮廓，光流代表数据或能量的传递。
 
     严格要求：
-    1. 画面主体必须让观众一眼能联想到“高端数码、Apple、智能生活”。
-    2. 只输出一段极度具体、画面感极强的中文图像描述（作为 Midjourney 即时生图的 Prompt），不要超过 150 个字。严禁包含任何“好的”、“为你提供”等废话。
-    3. 必须包含画面主体、材质、光影效果（如影棚级光线、丁达尔光等）。
+    1. 画面主体必须让观众一眼能联感到“高端苹果生态、智能、精致”。
+    2. 只输出一段极度具体、画面感极强的图像描述（MJ/Prompt 风格），不要超过 200 个字。严禁废话。
+    3. 必须包含：画面主体、材质细节、环境光影、背景干净度（强调为排版留放文字空间）。
     """
     
     try:
@@ -383,8 +389,8 @@ def generate_silicon_pure_background(theme: str) -> str | None:
         )
         ai_generated_prompt = res.choices[0].message.content.strip()
     except Exception as e:
-        print(f"⚠️ 动态 prompt 生成失败，降级为经典手机特写底图: {e}")
-        ai_generated_prompt = "极简高质感底图。正中央完全对称放置一部新款智能手机的正面高清大特写，手机主体极大，精确占据整个画面高度的75%，宽高比为9:19.5，为上下方留出完美的留白排版空间。手机屏幕的最顶部有标志性的极窄黑色药丸形状灵动岛。手机屏幕内全屏展示着色彩明艳可爱的卡通萌物壁纸。影棚级明亮柔和的光线，画面极度干净、纯粹、几何对称感极强。"
+        print(f"⚠️ 动态 prompt 生成失败，降级为经典底图: {e}")
+        ai_generated_prompt = "极简高质感底图。正中央放置高科技数码设备的质感局部特写，比如新款手机或手表的精致材质边缘。柔和且纯净的影棚光，画面有极大的干净留白区域用于文字排版，色调温润如星光色或太空灰。"
 
     refined_prompt = f"竖向构图。{ai_generated_prompt}。8K分辨率，杰作，极简高级质感，纯净无杂物，绝对完美的留白排版空间。"
     print(f"✨ 本次抽签生成的盲盒底图 Prompt: {refined_prompt}")
@@ -692,7 +698,8 @@ def main_workflow() -> None:
     history_ids = get_history_ids()
 
     # 1. 搜索
-    results = run_cmd(f'python cdp_publish.py --reuse-existing-tab search-feeds --keyword "{search_keyword}" --sort-by 最多点赞 --note-type 图文')
+    headless_arg = "--headless" if USE_HEADLESS else ""
+    results = run_cmd(f'python cdp_publish.py {headless_arg} --reuse-existing-tab search-feeds --keyword "{search_keyword}" --sort-by 最多点赞 --note-type 图文')
     if not results or 'feeds' not in results:
         print("❌ 搜索失败。"); return
 
@@ -704,7 +711,7 @@ def main_workflow() -> None:
     for f in unposted_raw[:SEARCH_LIMIT]:
         f_id = f.get('id')
         # 加上 --load-all-comments 抓取评论痛点
-        res = run_cmd(f'python cdp_publish.py --reuse-existing-tab get-feed-detail --feed-id "{f_id}" --xsec-token "{f.get("xsecToken")}" --load-all-comments')
+        res = run_cmd(f'python cdp_publish.py {headless_arg} --reuse-existing-tab get-feed-detail --feed-id "{f_id}" --xsec-token "{f.get("xsecToken")}" --load-all-comments')
         if res and 'detail' in res and 'note' in res['detail']:
             note = res['detail']['note']
             
@@ -843,7 +850,7 @@ def main_workflow() -> None:
     
     imgs_arg = " ".join([f'"{p}"' for p in sorted_imgs])
     publish_cmd = (
-        f'python publish_pipeline.py --reuse-existing-tab --auto-publish '
+        f'python publish_pipeline.py {headless_arg} --reuse-existing-tab --auto-publish '
         f'--title "{new_post["title"]}" --content-file "{str(content_file.resolve())}" --images {imgs_arg}'
     )
     run_cmd(publish_cmd)
