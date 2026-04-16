@@ -6,6 +6,7 @@ import subprocess
 import requests
 import shutil
 import concurrent.futures
+from datetime import datetime, timedelta
 import tkinter as tk
 from tkinter import messagebox, ttk
 from pathlib import Path
@@ -132,7 +133,14 @@ EMOTION_POOL = [
 TEMP_IMG_DIR = PROJECT_ROOT / "temp_downloads"
 HISTORY_FILE = PROJECT_ROOT / "published_ids.txt"
 IMG_CROP_PIXELS = 2
-USE_HEADLESS = True             # 是否使用无头模式运行浏览器
+USE_HEADLESS = False             # 是否使用无头模式运行浏览器
+
+# 5. 智能调度配置
+DATA_DIR = PROJECT_ROOT / "data"
+PERFORMANCE_LOG_FILE = DATA_DIR / "performance_log.json"
+GOLDEN_HOURS = [8, 12, 18, 20, 21]   # 小红书流量高峰时段
+ENABLE_SMART_SCHEDULE = True          # 是否启用黄金时段定时发布
+SMART_TOPIC_EXPLORE_RATIO = 0.2      # 20% 概率探索新品类
 # ==========================================
 
 def get_history_ids() -> set[str]:
@@ -144,30 +152,319 @@ def save_history_id(f_id: str) -> None:
     with open(HISTORY_FILE, "a", encoding="utf-8") as f:
         f.write(f"{f_id}\n")
 
-def run_cmd(cmd: str, timeout: int = 60) -> dict | None:
-    """正则解析命令行输出的 JSON，包含超时机制"""
+# ================= 数据持久化层 =================
+def _ensure_data_dir() -> None:
+    """确保 data 目录存在"""
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+def load_performance_log() -> list[dict]:
+    """读取发布效果日志"""
+    if not PERFORMANCE_LOG_FILE.exists():
+        return []
     try:
-        process = subprocess.Popen(
-            cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            cwd=str(SCRIPTS_DIR), universal_newlines=False
-        )
-        try:
-            stdout_bytes, stderr_bytes = process.communicate(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            stdout_bytes, stderr_bytes = process.communicate()
-            print(f"❌ [run_cmd] 执行超时 ({timeout}s): {cmd}")
-            return None
+        with open(PERFORMANCE_LOG_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return data if isinstance(data, list) else []
+    except Exception as e:
+        print(f"⚠️ 读取发布日志失败: {e}")
+        return []
+
+def save_performance_log(log: list[dict]) -> None:
+    """保存发布效果日志"""
+    _ensure_data_dir()
+    with open(PERFORMANCE_LOG_FILE, "w", encoding="utf-8") as f:
+        json.dump(log, f, ensure_ascii=False, indent=2)
+
+def append_performance_record(record: dict) -> None:
+    """追加一条发布记录"""
+    log = load_performance_log()
+    log.append(record)
+    save_performance_log(log)
+
+def _get_interaction_score(metrics: dict | None) -> float:
+    """根据互动数据计算综合得分（点赞×1 + 收藏×2 + 评论×3）"""
+    if not metrics or not isinstance(metrics, dict):
+        return 0.0
+    # 兼容后端返回的中文/英文 Key
+    like = metrics.get("like", metrics.get("点赞", 0)) or 0
+    fav = metrics.get("fav", metrics.get("收藏", 0)) or 0
+    comment = metrics.get("comment", metrics.get("评论", 0)) or 0
+    return float(like + fav * 2 + comment * 3)
+
+    return float(like + fav * 2 + comment * 3)
+
+def _classify_topic_category(topic: str) -> str:
+    """将一个选题短语映射到 APPLE_TOPICS_DICT 的品类 key"""
+    for category, topics in APPLE_TOPICS_DICT.items():
+        for t in topics:
+            # 模糊匹配：选题包含品类中某个条目的关键词
+            if t in topic or topic in t:
+                return category
+    # 未匹配到的归到通用品类
+    return "其他"
+
+# ================= 智能选题策略 =================
+def smart_pick_topic() -> tuple[str, str]:
+    """
+    数据驱动的智能选题。
+    返回 (品类名, 选题关键词)。
+    80% 概率选历史表现最佳品类，20% 随机探索。
+    """
+    log = load_performance_log()
+    scored_records = [r for r in log if r.get("metrics") and _get_interaction_score(r.get("metrics")) > 0]
+    
+    if len(scored_records) < 3:
+        # 数据不足，降级为纯随机
+        print("📊 [智能选题] 历史数据不足（<3条），使用随机品类")
+        category = random.choice(list(APPLE_TOPICS_DICT.keys()))
+        return category, _ai_generate_topic_from_category(category)
+    
+    # 统计每个品类的平均互动得分
+    category_scores: dict[str, list[float]] = {}
+    for r in scored_records:
+        cat = r.get("category", "其他")
+        score = _get_interaction_score(r.get("metrics"))
+        category_scores.setdefault(cat, []).append(score)
+    
+    category_avg = {cat: sum(scores) / len(scores) for cat, scores in category_scores.items()}
+    
+    # 补充从未发布过的品类（给予基础分数以便探索）
+    all_categories = list(APPLE_TOPICS_DICT.keys())
+    base_score = max(category_avg.values()) * 0.3 if category_avg else 1.0
+    for cat in all_categories:
+        if cat not in category_avg:
+            category_avg[cat] = base_score
+    
+    # 80/20 策略
+    if random.random() < SMART_TOPIC_EXPLORE_RATIO:
+        # 探索：随机选择
+        category = random.choice(all_categories)
+        print(f"🔬 [智能选题] 探索模式 → 随机品类：{category}")
+    else:
+        # 开发：按得分加权随机
+        cats = list(category_avg.keys())
+        weights = [max(0.1, category_avg[c]) for c in cats]
+        category = random.choices(cats, weights=weights, k=1)[0]
+        print(f"📈 [智能选题] 开发模式 → 高权重品类：{category} (avg={category_avg[category]:.1f})")
+    
+    return category, _ai_generate_topic_from_category(category)
+
+def _ai_generate_topic_from_category(category: str) -> str:
+    """在指定品类下用 AI 生成一个新鲜选题"""
+    category_topics = APPLE_TOPICS_DICT.get(category, APPLE_TOPICS)
+    sample = random.sample(category_topics, min(5, len(category_topics)))
+    try:
+        topic_prompt = f"""
+        你是一个资深的苹果数码博主。请你在【{category}】这个品类下，想出一个【绝佳的、极具痛点和吸引力】的小红书苹果/iOS使用技巧选题。
+        你可以参考以下已有的选题框架提取灵感，但【必须输出一个全新、独特、高度垂直】的新鲜选题：
+        参考框架：{sample}
         
-        output = stdout_bytes.decode('utf-8', errors='ignore').strip()
-        match = re.search(r'(\{.*\})', output, re.DOTALL)
-        if match:
-            try: return json.loads(match.group(1))
-            except Exception as e: print(f"⚠️ [run_cmd] JSON解析失败: {e}")
+        严格要求：
+        1. 只输出选题的核心短语（控制在12个字以内）。
+        2. 严禁包含任何标点符号、解释性语句或废话。
+        """
+        topic_res = sf_client.chat.completions.create(
+            model=SF_TEXT_MODEL,
+            messages=[{"role": "user", "content": topic_prompt}],
+            temperature=0.85
+        )
+        keyword = topic_res.choices[0].message.content.strip()
+        keyword = re.sub(r'[^\w\u4e00-\u9fa5]', '', keyword)
+        if keyword:
+            return keyword
+    except Exception as e:
+        print(f"⚠️ AI品类选题失败: {e}")
+    return random.choice(category_topics)
+
+# ================= 文案风格动态进化 =================
+def smart_pick_style() -> tuple[str, str]:
+    """
+    根据历史数据选择最优的 (人设, 情绪) 组合。
+    表现好的组合权重更高，但保留探索性。
+    """
+    log = load_performance_log()
+    scored_records = [r for r in log if r.get("metrics") and _get_interaction_score(r.get("metrics")) > 0]
+    
+    if len(scored_records) < 3:
+        print("🎭 [风格进化] 历史数据不足，使用随机风格")
+        return random.choice(PERSONA_POOL), random.choice(EMOTION_POOL)
+    
+    # 统计每个 (persona, emotion) 组合的平均得分
+    combo_scores: dict[tuple[str, str], list[float]] = {}
+    for r in scored_records:
+        key = (r.get("persona", ""), r.get("emotion", ""))
+        if key[0] and key[1]:
+            score = _get_interaction_score(r.get("metrics"))
+            combo_scores.setdefault(key, []).append(score)
+    
+    if not combo_scores:
+        return random.choice(PERSONA_POOL), random.choice(EMOTION_POOL)
+    
+    # 构建全量组合池（含未使用过的）
+    all_combos = [(p, e) for p in PERSONA_POOL for e in EMOTION_POOL]
+    combo_avg = {k: sum(v) / len(v) for k, v in combo_scores.items()}
+    base_score = max(combo_avg.values()) * 0.4 if combo_avg else 1.0
+    
+    weights = []
+    for combo in all_combos:
+        weights.append(max(0.1, combo_avg.get(combo, base_score)))
+    
+    chosen = random.choices(all_combos, weights=weights, k=1)[0]
+    avg_display = combo_avg.get(chosen, base_score)
+    print(f"🎭 [风格进化] 选择组合：人设='{chosen[0][:6]}...' 情绪='{chosen[1][:6]}...' (avg={avg_display:.1f})")
+    return chosen
+
+# ================= 发布时间优化 =================
+def get_optimal_publish_time() -> str | None:
+    """
+    计算最优发布时间。
+    如果当前在黄金窗口(±30min)内，返回 None（立即发布）。
+    否则返回最近的下一个黄金时段的 'yyyy-MM-dd HH:mm' 字符串。
+    """
+    if not ENABLE_SMART_SCHEDULE:
         return None
-    except Exception as e: 
-        print(f"❌ [run_cmd] 执行异常: {e}")
-        return None
+    
+    now = datetime.now()
+    current_hour = now.hour
+    current_minute = now.minute
+    
+    # 检查是否在某个黄金时段的 ±30 分钟窗口内
+    for gh in GOLDEN_HOURS:
+        target = now.replace(hour=gh, minute=0, second=0, microsecond=0)
+        diff_minutes = abs((now - target).total_seconds()) / 60
+        if diff_minutes <= 30:
+            print(f"⏰ [智能调度] 当前正处于黄金时段 {gh}:00 窗口内，立即发布！")
+            return None
+    
+    # 找到最近的下一个黄金时段
+    for gh in sorted(GOLDEN_HOURS):
+        target = now.replace(hour=gh, minute=0, second=0, microsecond=0)
+        if target > now:
+            post_time = target.strftime("%Y-%m-%d %H:%M")
+            print(f"⏰ [智能调度] 当前非黄金时段，定时到 {post_time} 发布")
+            return post_time
+    
+    # 今天的黄金时段都过了，定时到明天第一个
+    first_hour = sorted(GOLDEN_HOURS)[0]
+    target = (now + timedelta(days=1)).replace(hour=first_hour, minute=0, second=0, microsecond=0)
+    post_time = target.strftime("%Y-%m-%d %H:%M")
+    print(f"⏰ [智能调度] 今日黄金时段已过，定时到明天 {post_time} 发布")
+    return post_time
+
+# ================= 效果回查闭环 =================
+def backfill_performance_metrics() -> None:
+    """
+    扫描 performance_log 中 metrics=null 且发布超过 24h 的记录，
+    通过 content-data API 回填真实互动数据。
+    """
+    log = load_performance_log()
+    pending = [
+        (i, r) for i, r in enumerate(log)
+        if r.get("metrics") is None and r.get("published_at")
+    ]
+    
+    if not pending:
+        return
+    
+    # 筛选超过 24h 的记录
+    now = datetime.now()
+    stale = []
+    for i, r in pending:
+        try:
+            pub_time = datetime.strptime(r["published_at"], "%Y-%m-%d %H:%M")
+            if (now - pub_time).total_seconds() > 24 * 3600:
+                stale.append((i, r))
+        except ValueError:
+            continue
+    
+    if not stale:
+        print(f"📊 [效果回查] {len(pending)} 条待回查记录均未满 24h，跳过")
+        return
+    
+    print(f"📊 [效果回查] 正在回查 {len(stale)} 条超过 24h 的笔记数据...")
+    
+    headless_arg = "--headless" if USE_HEADLESS else ""
+    # 拉取最新的内容数据（一次拉最多 50 条以覆盖近期发布）
+    result = run_cmd(
+        f'python cdp_publish.py {headless_arg} --reuse-existing-tab content-data --page-size 50',
+        timeout=120
+    )
+    
+    if not result or 'rows' not in result:
+        print("⚠️ [效果回查] content-data 拉取失败，跳过本次回查")
+        return
+    
+    rows = result['rows']
+    updated_count = 0
+    
+    for idx, record in stale:
+        title = record.get("title", "")
+        if not title:
+            continue
+        
+        # 按标题模糊匹配
+        matched_row = None
+        for row in rows:
+            row_title = row.get("标题", "")
+            if row_title and (title in row_title or row_title in title):
+                matched_row = row
+                break
+        
+        if matched_row:
+            metrics = {
+                "impression": matched_row.get("曝光", 0),
+                "like": matched_row.get("点赞", 0),
+                "fav": matched_row.get("收藏", 0),
+                "comment": matched_row.get("评论", 0),
+                "share": matched_row.get("分享", 0),
+            }
+            log[idx]["metrics"] = metrics
+            score = _get_interaction_score(metrics)
+            print(f"  ✅ 回填成功：{title[:15]}... → 得分={score:.0f}")
+            updated_count += 1
+    
+    if updated_count > 0:
+        save_performance_log(log)
+        print(f"📊 [效果回查] 本次共回填 {updated_count} 条记录")
+
+def run_cmd(cmd: str, timeout: int = 120, retries: int = 1) -> dict | None:
+    """正则解析命令行输出的 JSON，包含超时机制与自动重试逻辑"""
+    for attempt in range(retries + 1):
+        try:
+            process = subprocess.Popen(
+                cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                cwd=str(SCRIPTS_DIR), universal_newlines=False
+            )
+            try:
+                stdout_bytes, stderr_bytes = process.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                stdout_bytes, stderr_bytes = process.communicate()
+                print(f"❌ [run_cmd] 执行超时 ({timeout}s): {cmd}")
+                if attempt < retries:
+                    print(f"🔄 [run_cmd] 正在进行第 {attempt + 1} 次重试...")
+                    continue
+                return None
+            
+            output = stdout_bytes.decode('utf-8', errors='ignore').strip()
+            match = re.search(r'(\{.*\})', output, re.DOTALL)
+            if match:
+                try: 
+                    return json.loads(match.group(1))
+                except Exception as e: 
+                    print(f"⚠️ [run_cmd] JSON解析失败: {e}")
+            
+            # 如果没匹配到 JSON 或解析失败，视情况重试
+            if attempt < retries:
+                print(f"🔄 [run_cmd] 未获取有效结果，正在进行第 {attempt + 1} 次重试...")
+                continue
+            return None
+        except Exception as e: 
+            print(f"❌ [run_cmd] 执行异常: {e}")
+            if attempt < retries:
+                continue
+            return None
+    return None
 
 def show_confirm_box(title: str, content: str, timeout: int = 0, default: bool = True) -> bool:
     """弹出 Yes/No 确认框, 支持超时默认"""
@@ -611,11 +908,11 @@ def send_dingtalk_msg(title: str, content: str, img_url: str = None) -> None:
     except Exception as e:
         print(f"⚠️ 钉钉群推送异常: {e}")
 
-def ai_create_content(materials: list[str], search_keyword: str) -> dict | None:
-    """文案创作：多源缝合+人设情绪注入"""
+def ai_create_content(materials: list[str], search_keyword: str, persona: str | None = None, emotion: str | None = None) -> dict | None:
+    """文案创作：多源缝合+人设情绪注入（支持外部传入智能选择的风格）"""
     combined_raw = "\n---\n".join(materials)
-    persona = random.choice(PERSONA_POOL)
-    emotion = random.choice(EMOTION_POOL)
+    persona = persona or random.choice(PERSONA_POOL)
+    emotion = emotion or random.choice(EMOTION_POOL)
     
     # --- 核心改进：加强洗稿约束 ---
     prompt = f"""
@@ -666,40 +963,27 @@ def main_workflow() -> None:
     # 每次运行前强行清空历史残留的临时物料
     clean_temp_files()
     
-    # --- 核心改进：大模型动态延伸选题 ---
-    print("🧠 正在通过大模型脑爆无限新选题...")
-    try:
-        sample_topics = random.sample(APPLE_TOPICS, 10)
-        topic_prompt = f"""
-        你是一个资深的苹果数码博主。请你想出一个【绝佳的、极具痛点和吸引力】的小红书苹果/iOS使用技巧选题。
-        你可以参考以下已有的选题框架提取灵感，但【必须输出一个全新、独特、高度垂直】的新鲜选题：
-        参考框架：{sample_topics}
-        
-        严格要求：
-        1. 只输出选题的核心短语（控制在12个字以内，例如：iPhone快捷视频提取、iPad分屏效率神器等）。
-        2. 严禁包含任何标点符号、解释性语句或废话。
-        """
-        topic_res = sf_client.chat.completions.create(
-            model=SF_TEXT_MODEL,
-            messages=[{"role": "user", "content": topic_prompt}],
-            temperature=0.8
-        )
-        search_keyword = topic_res.choices[0].message.content.strip()
-        search_keyword = re.sub(r'[^\w\u4e00-\u9fa5]', '', search_keyword)
-        if not search_keyword:
-            raise ValueError("生成选题为空")
-        print(f"🌟 AI无尽选题引擎生成了全新选题: {search_keyword}")
-    except Exception as e:
-        print(f"⚠️ AI选题生成失败，降级使用本地经典题库 ({e})")
-        search_keyword = random.choice(APPLE_TOPICS)
-    # ----------------------------------------
+    # --- 效果回查闭环：回填历史笔记的真实互动数据 ---
+    print("📊 === 效果回查：扫描待回填的历史笔记 ===")
+    backfill_performance_metrics()
+    
+    # --- 智能选题：数据驱动的品类选择 + AI 生成新鲜选题 ---
+    print("🧠 === 智能选题引擎启动 ===")
+    topic_category, search_keyword = smart_pick_topic()
+    print(f"🌟 选题结果：品类=[{topic_category}] 关键词=[{search_keyword}]")
+    
+    # --- 风格进化：选择最优人设+情绪组合 ---
+    chosen_persona, chosen_emotion = smart_pick_style()
     
     print(f"🚀 === 任务启动 | 今日选题：{search_keyword} ===")
     history_ids = get_history_ids()
 
     # 1. 搜索
     headless_arg = "--headless" if USE_HEADLESS else ""
-    results = run_cmd(f'python cdp_publish.py {headless_arg} --reuse-existing-tab search-feeds --keyword "{search_keyword}" --sort-by 最多点赞 --note-type 图文')
+    results = run_cmd(
+        f'python cdp_publish.py {headless_arg} --reuse-existing-tab search-feeds --keyword "{search_keyword}" --sort-by 最多点赞 --note-type 图文',
+        timeout=180, retries=2
+    )
     if not results or 'feeds' not in results:
         print("❌ 搜索失败。"); return
 
@@ -710,8 +994,11 @@ def main_workflow() -> None:
     
     for f in unposted_raw[:SEARCH_LIMIT]:
         f_id = f.get('id')
-        # 加上 --load-all-comments 抓取评论痛点
-        res = run_cmd(f'python cdp_publish.py {headless_arg} --reuse-existing-tab get-feed-detail --feed-id "{f_id}" --xsec-token "{f.get("xsecToken")}" --load-all-comments')
+        # 加上 --load-all-comments 抓取评论痛点，且给 180s 宽裕时间
+        res = run_cmd(
+            f'python cdp_publish.py {headless_arg} --reuse-existing-tab get-feed-detail --feed-id "{f_id}" --xsec-token "{f.get("xsecToken")}" --load-all-comments',
+            timeout=180
+        )
         if res and 'detail' in res and 'note' in res['detail']:
             note = res['detail']['note']
             
@@ -761,7 +1048,7 @@ def main_workflow() -> None:
             materials.append(f"【补充视角参考 {i}】标题: {feed['note'].get('title')} | 摘要: {feed['note'].get('desc')[:100]}...\n【该话题其他评论反馈】: {', '.join(feed.get('top_comments', [])[:3])}")
     
     # 4. 文案合成
-    new_post = ai_create_content(materials, search_keyword)
+    new_post = ai_create_content(materials, search_keyword, persona=chosen_persona, emotion=chosen_emotion)
     if not new_post: return
 
     # 5. 提取图片
@@ -839,7 +1126,7 @@ def main_workflow() -> None:
                 if p and processed_imgs:
                     processed_imgs[0] = p # 替换掉生成的第一张图
         # ------------------------------------------------
-    # 8. 发布
+    # 8. 发布（含智能时间调度）
     if not processed_imgs: return
     print(f"📝 准备发布原创作品: {new_post['title']}")
     content_file = TEMP_IMG_DIR / "post.txt"
@@ -848,16 +1135,33 @@ def main_workflow() -> None:
     # 重新排序确保顺序正确 img_0, img_1...
     sorted_imgs = sorted(processed_imgs, key=lambda x: int(re.search(r'img_(\d+)', x).group(1)))
     
+    # 智能发布时间调度
+    optimal_time = get_optimal_publish_time()
+    post_time_arg = f'--post-time "{optimal_time}"' if optimal_time else ""
+    
     imgs_arg = " ".join([f'"{p}"' for p in sorted_imgs])
     publish_cmd = (
         f'python publish_pipeline.py {headless_arg} --reuse-existing-tab --auto-publish '
+        f'{post_time_arg} '
         f'--title "{new_post["title"]}" --content-file "{str(content_file.resolve())}" --images {imgs_arg}'
     )
     run_cmd(publish_cmd)
 
-    # 9. 善后
+    # 9. 善后：保存发布记录到性能日志（用于智能选题和风格进化）
+    published_at = optimal_time or datetime.now().strftime("%Y-%m-%d %H:%M")
+    append_performance_record({
+        "id": main_id,
+        "title": new_post.get("title", ""),
+        "topic": search_keyword,
+        "category": topic_category,
+        "persona": chosen_persona,
+        "emotion": chosen_emotion,
+        "published_at": published_at,
+        "metrics": None  # 将由 backfill_performance_metrics() 在 24h 后回填
+    })
+    
     save_history_id(main_id)
-    print(f"✅ 【{search_keyword}】发布完成！")
+    print(f"✅ 【{search_keyword}】发布完成！策略数据已记录。")
     # 清理临时文件
     clean_temp_files()
 
