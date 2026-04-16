@@ -140,6 +140,11 @@ def launch_chrome(
         f"--user-data-dir={user_data_dir}",
         "--no-first-run",
         "--no-default-browser-check",
+        # 禁止后台节流：解决浏览器最小化/后台时 JS 执行频率降低和 DOM 不更新的问题
+        "--disable-background-timer-throttling",
+        "--disable-renderer-backgrounding",
+        "--disable-backgrounding-occluded-windows",
+        "--disable-background-media-suspend",
     ]
 
     if headless:
