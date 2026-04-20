@@ -585,35 +585,57 @@ class XiaohongshuPublisher:
             self.ws = None
 
     def _inject_stealth_scripts(self):
-        """Inject stealth scripts to bypass bot detection."""
+        """Inject advanced stealth scripts to bypass hardware fingerprinting and bot detection."""
         stealth_js = """
         (function() {
-            // Hide navigator.webdriver
-            Object.defineProperty(navigator, 'webdriver', {
-                get: () => undefined
-            });
+            // 1. Hide navigator.webdriver (redundant with Chrome flags but good for safety)
+            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
 
-            // Override WebGL parameters
+            // 2. WebGL Fingerprinting Masking
             const getParameter = WebGLRenderingContext.prototype.getParameter;
             WebGLRenderingContext.prototype.getParameter = function(parameter) {
-                // UNMASKED_VENDOR_WEBGL
-                if (parameter === 37445) return 'Intel Inc.';
-                // UNMASKED_RENDERER_WEBGL
-                if (parameter === 37446) return 'Intel(R) Iris(R) Xe Graphics';
+                if (parameter === 37445) return 'Intel Inc.'; // UNMASKED_VENDOR_WEBGL
+                if (parameter === 37446) return 'Intel(R) Iris(R) Xe Graphics'; // UNMASKED_RENDERER_WEBGL
                 return getParameter.apply(this, arguments);
             };
 
-            // Mask chrome plugins/languages if necessary
-            Object.defineProperty(navigator, 'plugins', {
-                get: () => [1, 2, 3, 4, 5]
-            });
-            
-            // Bypass hardware concurrency fingerprinting
-            Object.defineProperty(navigator, 'hardwareConcurrency', {
-                get: () => 8
-            });
+            // 3. Canvas Fingerprinting Masking (Add slight noise)
+            const originalToDataURL = HTMLCanvasElement.prototype.toDataURL;
+            HTMLCanvasElement.prototype.toDataURL = function(type) {
+                if (type === 'image/png' && this.width > 0 && this.height > 0) {
+                    const ctx = this.getContext('2d');
+                    const imageData = ctx.getImageData(0, 0, 1, 1);
+                    imageData.data[0] = imageData.data[0] ^ 1; // Tweak 1 pixel
+                    ctx.putImageData(imageData, 0, 0);
+                }
+                return originalToDataURL.apply(this, arguments);
+            };
 
-            console.log('[stealth] Browser fingerprints masked.');
+            // 4. Audio Fingerprinting Masking
+            const originalGetFloatFrequencyData = AudioAnalyserNode.prototype.getFloatFrequencyData;
+            AudioAnalyserNode.prototype.getFloatFrequencyData = function(array) {
+                originalGetFloatFrequencyData.apply(this, arguments);
+                for (let i = 0; i < array.length; i++) {
+                    array[i] += Math.random() * 0.01;
+                }
+            };
+
+            // 5. Hardware Concurrency & Memory
+            Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
+            Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
+
+            // 6. Language & User-Agent Consistency
+            Object.defineProperty(navigator, 'languages', { get: () => ['zh-CN', 'zh', 'en'] });
+            
+            // 7. Permissions Masking
+            const originalQuery = navigator.permissions.query;
+            navigator.permissions.query = (parameters) => (
+                parameters.name === 'notifications' ?
+                Promise.resolve({ state: Notification.permission }) :
+                originalQuery(parameters)
+            );
+
+            console.log('[stealth] Advanced hardware fingerprints masked.');
         })();
         """
         # Inject to run on every new document (navigation)
@@ -4000,6 +4022,32 @@ class XiaohongshuPublisher:
 
         return note_link
 
+    def _human_idle(self, seconds: float = 5.0):
+        """Simulate a human pause, with occasional small mouse jitters."""
+        print(f"[cdp_publish] Human-like pause: {seconds}s...")
+        end_time = time.time() + seconds
+        while time.time() < end_time:
+            if random.random() < 0.3: # 30% chance to jitter mouse
+                jx = random.uniform(-20, 20)
+                jy = random.uniform(-20, 20)
+                # Assume we are somewhere near the center if we don't know current pos
+                self._move_mouse(960 + jx, 540 + jy)
+            time.sleep(random.uniform(0.5, 1.5))
+
+    def _human_scroll(self, distance: int = 500):
+        """Simulate human scrolling."""
+        print(f"[cdp_publish] Human-like scrolling: {distance}px...")
+        steps = random.randint(5, 10)
+        step_dist = distance / steps
+        for _ in range(steps):
+            self._evaluate(f"window.scrollBy(0, {step_dist + random.uniform(-20, 20)})")
+            time.sleep(random.uniform(0.2, 0.5))
+        
+        # 偶尔回弹一下
+        if random.random() < 0.5:
+            self._evaluate(f"window.scrollBy(0, {-random.randint(50, 150)})")
+            time.sleep(random.uniform(0.3, 0.6))
+
     # ------------------------------------------------------------------
     # Main publish workflow
     # ------------------------------------------------------------------
@@ -4012,19 +4060,7 @@ class XiaohongshuPublisher:
         post_time: str | None = None,
     ):
         """
-        Execute the full publish workflow:
-        1. Navigate to creator publish page
-        2. Click '上传图文' tab
-        3. Upload images (this triggers the editor to appear)
-        4. Fill title
-        5. Fill content
-        6. Set schedule publish time (if necessary)
-
-        Args:
-            title: Article title
-            content: Article body text (paragraphs separated by newlines)
-            image_paths: List of local file paths to images to upload
-            post_time: Optional scheduled publish time (e.g. "2026-03-01 10:00")
+        Execute the full publish workflow with enhanced human-like behavior.
         """
         if not self.ws:
             raise CDPError("Not connected. Call connect() first.")
@@ -4034,32 +4070,44 @@ class XiaohongshuPublisher:
         
         if post_time and not validate_schedule_post_time(post_time):
             raise CDPError(
-                "Scheduled publish time is invalid. "
-                "It must follow the format 'yyyy-MM-dd HH:mm' and fall within the next 14 days."
+                "Scheduled publish time is invalid. Format: 'yyyy-MM-dd HH:mm'."
             )
 
         # Step 1: Navigate to publish page
         self._navigate(XHS_CREATOR_URL)
         self._sleep(2, minimum_seconds=1.0)
+        
+        # [拟人化] 随机滚动一下页面，模拟观察
+        self._human_scroll(random.randint(200, 500))
 
         # Step 2: Click '上传图文' tab
         self._click_image_text_tab()
+        self._human_idle(random.uniform(1.0, 2.5))
 
-        # Step 3: Upload images (editor appears after upload)
+        # Step 3: Upload images
         self._upload_images(image_paths)
+        self._human_idle(random.uniform(2.0, 4.0)) # 等待上传预览
 
         # Step 4: Fill title
         self._fill_title(title)
+        self._human_idle(random.uniform(1.0, 2.0))
 
         # Step 5: Fill content
         self._fill_content(content)
+        
+        # [拟人化] 填充完后模拟“回头检查”内容
+        self._human_scroll(-random.randint(300, 600))
+        self._human_idle(random.uniform(3.0, 8.0)) # 模拟检查文案
 
         # Step 6: Set schedule publish time (if provided)
         self._set_schedule_post_time(post_time)
+        
+        # [拟人化] 最后一次“深呼吸”停顿
+        self._human_idle(random.uniform(2.0, 5.0))
 
         print(
             "\n[cdp_publish] Content has been filled in.\n"
-            "  Please review in the browser before publishing.\n"
+            "  Stealth reinforcements and behavioral simulation applied.\n"
         )
 
     def publish_video(

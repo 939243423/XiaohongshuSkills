@@ -146,6 +146,11 @@ def launch_chrome(
         "--disable-renderer-backgrounding",
         "--disable-backgrounding-occluded-windows",
         "--disable-background-media-suspend",
+        
+        # 深度隐身参数
+        "--disable-blink-features=AutomationControlled", # 核心：从底层移除 navigator.webdriver
+        "--disable-infobars",                            # 移除“受到自动化测试软件控制”的提示
+        "--excludeSwitches", "enable-automation",         # 进一步移除自动化标记
     ]
 
     # 随机化窗口大小，增加指纹随机性
