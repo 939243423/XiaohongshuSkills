@@ -118,14 +118,21 @@ PERSONA_POOL = [
     "专给长辈写教程的耐心外甥", 
     "只会用大白话解释的数码小白救星",
     "十年果粉带一点小高冷的老玩家",
-    "省吃俭用热衷免费薅羊毛特性的打工人"
+    "省吃俭用热衷免费薅羊毛特性的打工人",
+    "追求极致效率的极简主义达人",
+    "爱抬杠但总能说到点子上的数码老炮",
+    "主打‘陪伴式’自用的数码博主",
+    "毒舌但真实的硬件测评人"
 ]
 
 EMOTION_POOL = [
     "开篇必须要吐槽一个痛点",
     "开篇要表现得非常激动，觉得大家不知道太可惜了",
     "开头要表现出对某些反人类交互设计感到非常无语",
-    "充满分享欲，像老朋友聊天一样自然引入"
+    "充满分享欲，像老朋友聊天一样自然引入",
+    "开篇先自嘲一下自己之前的蠢操作",
+    "带着一种‘发现新大陆’的神秘感切入",
+    "非常淡定地甩出一个冷知识"
 ]
 # ---------------------------------------------
 
@@ -189,8 +196,6 @@ def _get_interaction_score(metrics: dict | None) -> float:
     like = metrics.get("like", metrics.get("点赞", 0)) or 0
     fav = metrics.get("fav", metrics.get("收藏", 0)) or 0
     comment = metrics.get("comment", metrics.get("评论", 0)) or 0
-    return float(like + fav * 2 + comment * 3)
-
     return float(like + fav * 2 + comment * 3)
 
 def _classify_topic_category(topic: str) -> str:
@@ -315,40 +320,52 @@ def smart_pick_style() -> tuple[str, str]:
     return chosen
 
 # ================= 发布时间优化 =================
-def get_optimal_publish_time() -> str | None:
+def get_optimal_publish_time(offset_index: int = 0) -> str | None:
     """
     计算最优发布时间。
-    如果当前在黄金窗口(±30min)内，返回 None（立即发布）。
-    否则返回最近的下一个黄金时段的 'yyyy-MM-dd HH:mm' 字符串。
+    offset_index: 如果要批量发布，可以指定偏移量（如 0 为最近的，1 为再下一个）。
+    如果 offset_index 为 0 且当前在黄金窗口(±30min)内，返回 None（立即发布）。
+    否则返回对应的第 (offset_index + 1) 个黄金时段的 'yyyy-MM-dd HH:mm' 字符串。
     """
     if not ENABLE_SMART_SCHEDULE:
         return None
     
     now = datetime.now()
-    current_hour = now.hour
-    current_minute = now.minute
     
-    # 检查是否在某个黄金时段的 ±30 分钟窗口内
-    for gh in GOLDEN_HOURS:
-        target = now.replace(hour=gh, minute=0, second=0, microsecond=0)
-        diff_minutes = abs((now - target).total_seconds()) / 60
-        if diff_minutes <= 30:
-            print(f"⏰ [智能调度] 当前正处于黄金时段 {gh}:00 窗口内，立即发布！")
-            return None
-    
-    # 找到最近的下一个黄金时段
+    # 查找未来的黄金时段
+    future_slots = []
+    # 检查今天
     for gh in sorted(GOLDEN_HOURS):
         target = now.replace(hour=gh, minute=0, second=0, microsecond=0)
         if target > now:
-            post_time = target.strftime("%Y-%m-%d %H:%M")
-            print(f"⏰ [智能调度] 当前非黄金时段，定时到 {post_time} 发布")
-            return post_time
-    
-    # 今天的黄金时段都过了，定时到明天第一个
-    first_hour = sorted(GOLDEN_HOURS)[0]
-    target = (now + timedelta(days=1)).replace(hour=first_hour, minute=0, second=0, microsecond=0)
-    post_time = target.strftime("%Y-%m-%d %H:%M")
-    print(f"⏰ [智能调度] 今日黄金时段已过，定时到明天 {post_time} 发布")
+            # 如果是最近一个且在 30min 窗口内，标记为“立即”
+            diff_minutes = (target - now).total_seconds() / 60
+            if offset_index == 0 and diff_minutes <= 30:
+                # 注意：已经过了 30min 的话已经在上面 target > now 过滤掉了
+                # 这里 diff_minutes 其实是正值且 <= 30
+                pass 
+            future_slots.append(target)
+            
+    # 如果未来时段不够，补充明天的、后天的
+    days_offset = 1
+    while len(future_slots) <= offset_index + 1:
+        for gh in sorted(GOLDEN_HOURS):
+            target = (now + timedelta(days=days_offset)).replace(hour=gh, minute=0, second=0, microsecond=0)
+            future_slots.append(target)
+        days_offset += 1
+        if days_offset > 7: break # 安全边界
+
+    # 特殊情况：如果是第一个且在窗口内
+    if offset_index == 0:
+        for gh in GOLDEN_HOURS:
+            target = now.replace(hour=gh, minute=0, second=0, microsecond=0)
+            if abs((now - target).total_seconds()) / 60 <= 30:
+                print(f"⏰ [智能调度] 当前处于黄金窗口 {gh}:00，立即发布第 1 篇")
+                return None
+
+    target_slot = future_slots[offset_index]
+    post_time = target_slot.strftime("%Y-%m-%d %H:%M")
+    print(f"⏰ [智能调度] 第 {offset_index + 1} 篇定时到：{post_time}")
     return post_time
 
 # ================= 效果回查闭环 =================
@@ -924,11 +941,15 @@ def ai_create_content(materials: list[str], search_keyword: str, persona: str | 
     
     【强制要求】：
     1. 必须完全符合分配给你的人设和基调。结合基调表达你的情绪，严禁生硬。严禁使用过度的烂大街口癖如“家人们”、“绝绝子”。
-    2. 结构缝合：融合各篇干货。如果有给出“评论区的痛点反馈”，你【必须】在文中以自问自答或避坑提示的形式解答出来！
-    3. 视觉引导：正文分点必须带Emoji数字（1️⃣, 2️⃣...），每段话最多不超过100字，保持呼吸感。
-    4. 标题要求：爆款标题党！总字数算上表情符号一定要在20字内。
-    5. 封面短标题：根据标题进一步凝练出一个用于图片封面的极简短语（必须控制在10个字以内，最能一击即中痛点，不带任何表情符号，要有强烈的视觉冲击力）。
-    6. 结尾【极其重要】：正文的最后间隔一行再另起一行，至少带5个相关热门标签，格式为 #标签1 #标签2 #标签3。
+    2. 结构缝合：融合各篇干货。如果有给出“评论区的痛点反馈”，你应以自然融入的方式解答（比如：‘看到有人说...其实...’），不要总是用死板的问答格式。
+    3. 视觉引导：**严禁每一段都使用 1️⃣2️⃣3️⃣ 等固定数字开头**。请灵活混合使用：
+       - 加粗小标题
+       - 符号点（如 ✅, ✨, 💡, 📌 等）
+       - 或者直接分段，让文章看起来有呼吸感且不像说明书。
+    4. 句式多样化：每段话的长短要错落有致，避免整齐划一的排比句。严禁使用“总之”、“综上所述”等AI感明显的总结词。
+    5. 标题要求：爆款标题党！总字数算上表情符号一定要在20字内。
+    6. 封面短标题：根据标题进一步凝练出一个用于图片封面的极简短语（必须控制在10个字以内，最能一击即中痛点，不带任何表情符号，要有强烈的视觉冲击力）。
+    7. 结尾【极其重要】：正文的最后间隔一行再另起一行，至少带5个相关热门标签，格式为 #标签1 #标签2 #标签3。
 
     【海量参考资料及评论反馈池】：
     {combined_raw}
@@ -959,7 +980,22 @@ def ai_create_content(materials: list[str], search_keyword: str, persona: str | 
             print(f"❌ 文案双线全部失败: {e}")
             return None
 
-def main_workflow() -> None:
+def main_workflow(count: int = 1) -> None:
+    """
+    主工作流。
+    count: 连续生成并发布的篇数。
+    """
+    for i in range(count):
+        if i > 0:
+            # 批量发布时，每篇之间休息 5-15 分钟模拟真人
+            rest_minutes = random.randint(5, 15)
+            print(f"\n🛌 [批量模式] 已完成第 {i} 篇，休息 {rest_minutes} 分钟后开始下一篇...")
+            time.sleep(rest_minutes * 60)
+
+        print(f"\n🎬 === 开始执行第 {i+1}/{count} 篇发布任务 ===")
+        _single_note_workflow(index_in_batch=i)
+
+def _single_note_workflow(index_in_batch: int = 0) -> None:
     # 每次运行前强行清空历史残留的临时物料
     clean_temp_files()
     
@@ -1136,7 +1172,7 @@ def main_workflow() -> None:
     sorted_imgs = sorted(processed_imgs, key=lambda x: int(re.search(r'img_(\d+)', x).group(1)))
     
     # 智能发布时间调度
-    optimal_time = get_optimal_publish_time()
+    optimal_time = get_optimal_publish_time(offset_index=index_in_batch)
     post_time_arg = f'--post-time "{optimal_time}"' if optimal_time else ""
     
     imgs_arg = " ".join([f'"{p}"' for p in sorted_imgs])
@@ -1166,4 +1202,9 @@ def main_workflow() -> None:
     clean_temp_files()
 
 if __name__ == "__main__":
-    main_workflow()
+    import argparse
+    parser = argparse.ArgumentParser(description="Xiaohongshu AI Robot")
+    parser.add_argument("--count", type=int, default=1, help="一次运行生成的篇数 (默认: 1)")
+    args = parser.parse_args()
+    
+    main_workflow(count=args.count)

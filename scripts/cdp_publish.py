@@ -574,12 +574,57 @@ class XiaohongshuPublisher:
         print(f"[cdp_publish] Connecting to {ws_url}")
         self.ws = ws_client.connect(ws_url)
         print("[cdp_publish] Connected to Chrome tab.")
+        
+        # 注入隐身脚本隐藏自动化特征
+        self._inject_stealth_scripts()
 
     def disconnect(self):
         """Close the WebSocket connection."""
         if self.ws:
             self.ws.close()
             self.ws = None
+
+    def _inject_stealth_scripts(self):
+        """Inject stealth scripts to bypass bot detection."""
+        stealth_js = """
+        (function() {
+            // Hide navigator.webdriver
+            Object.defineProperty(navigator, 'webdriver', {
+                get: () => undefined
+            });
+
+            // Override WebGL parameters
+            const getParameter = WebGLRenderingContext.prototype.getParameter;
+            WebGLRenderingContext.prototype.getParameter = function(parameter) {
+                // UNMASKED_VENDOR_WEBGL
+                if (parameter === 37445) return 'Intel Inc.';
+                // UNMASKED_RENDERER_WEBGL
+                if (parameter === 37446) return 'Intel(R) Iris(R) Xe Graphics';
+                return getParameter.apply(this, arguments);
+            };
+
+            // Mask chrome plugins/languages if necessary
+            Object.defineProperty(navigator, 'plugins', {
+                get: () => [1, 2, 3, 4, 5]
+            });
+            
+            // Bypass hardware concurrency fingerprinting
+            Object.defineProperty(navigator, 'hardwareConcurrency', {
+                get: () => 8
+            });
+
+            console.log('[stealth] Browser fingerprints masked.');
+        })();
+        """
+        # Inject to run on every new document (navigation)
+        self._send("Page.addScriptToEvaluateOnNewDocument", {
+            "source": stealth_js
+        })
+        # Also run once in current document
+        try:
+            self._evaluate(stealth_js)
+        except:
+            pass
 
     # ------------------------------------------------------------------
     # CDP command helpers
@@ -3626,17 +3671,28 @@ class XiaohongshuPublisher:
             found = self._evaluate(f"!!document.querySelector('{selector}')")
             if found:
                 escaped_title = json.dumps(title)
+                # 使用字符步进式输入模拟真实打字
                 self._evaluate(f"""
-                    (function() {{
+                    (async function() {{
                         var el = document.querySelector('{selector}');
+                        el.focus();
                         var nativeSetter = Object.getOwnPropertyDescriptor(
                             window.HTMLInputElement.prototype, 'value'
                         ).set;
-                        el.focus();
-                        nativeSetter.call(el, {escaped_title});
-                        el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                        
+                        var text = {escaped_title};
+                        var current = "";
+                        const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+                        
+                        for (var i = 0; i < text.length; i++) {{
+                            current += text[i];
+                            nativeSetter.call(el, current);
+                            el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                            // 随机打字延迟 50ms - 150ms
+                            await sleep(Math.floor(Math.random() * 100) + 50);
+                        }}
                         el.dispatchEvent(new Event('change', {{ bubbles: true }}));
-                        el.blur();
+                        // el.blur(); // 暂时不 blur，防止触发不必要的校验
                     }})();
                 """)
                 print("[cdp_publish] Title set.")
@@ -3696,14 +3752,21 @@ class XiaohongshuPublisher:
                     el.removeChild(el.firstChild);
                 }}
 
+                const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
                 for (const line of lines) {{
                     const paragraph = document.createElement("p");
+                    el.appendChild(paragraph);
                     if (line) {{
-                        paragraph.textContent = line;
+                         for (let i = 0; i < line.length; i++) {{
+                             paragraph.textContent += line[i];
+                             el.dispatchEvent(new Event("input", {{ bubbles: true }}));
+                             // 正文打字稍快一点点，但也要有随机性
+                             await sleep(Math.floor(Math.random() * 60) + 20);
+                         }}
                     }} else {{
                         paragraph.appendChild(document.createElement("br"));
                     }}
-                    el.appendChild(paragraph);
+                    await sleep(Math.floor(Math.random() * 200) + 100); // 换行停顿
                 }}
 
                 el.dispatchEvent(new Event("input", {{ bubbles: true }}));
@@ -3854,17 +3917,21 @@ class XiaohongshuPublisher:
             "y": float(y),
         })
 
-    def _click_mouse(self, x: float, y: float):
-        """Perform a real left-click via CDP at the given coordinates."""
+    def _click_mouse(self, x: float, y: float, jitter_px: int = 3):
+        """Perform a real left-click via CDP at the given coordinates with optional jitter."""
+        # Add random offset to simulate human clicking
+        jx = x + random.uniform(-jitter_px, jitter_px)
+        jy = y + random.uniform(-jitter_px, jitter_px)
+        
         for event_type in ("mousePressed", "mouseReleased"):
             self._send("Input.dispatchMouseEvent", {
                 "type": event_type,
-                "x": float(x),
-                "y": float(y),
+                "x": float(jx),
+                "y": float(jy),
                 "button": "left",
                 "clickCount": 1,
             })
-            time.sleep(0.05)
+            time.sleep(random.uniform(0.05, 0.12))
 
     def _click_element_by_cdp(self, description: str, js_get_rect: str):
         """Click an element using CDP Input.dispatchMouseEvent for reliable clicks.
@@ -3887,18 +3954,13 @@ class XiaohongshuPublisher:
         # Compute center of the element
         cx = rect["x"] + rect["width"] / 2
         cy = rect["y"] + rect["height"] / 2
-        print(f"[cdp_publish] Clicking {description} at ({cx:.0f}, {cy:.0f})...")
-
-        # Dispatch a full mouse click sequence via CDP
-        for event_type in ("mousePressed", "mouseReleased"):
-            self._send("Input.dispatchMouseEvent", {
-                "type": event_type,
-                "x": cx,
-                "y": cy,
-                "button": "left",
-                "clickCount": 1,
-            })
-            time.sleep(0.05)
+        
+        # Add random jitter within the element bounds (max 5px or 20% of width/height)
+        jx = random.uniform(-min(5, rect["width"]*0.2), min(5, rect["width"]*0.2))
+        jy = random.uniform(-min(5, rect["height"]*0.2), min(5, rect["height"]*0.2))
+        
+        print(f"[cdp_publish] Clicking {description} at ({cx+jx:.0f}, {cy+jy:.0f})...")
+        self._click_mouse(cx + jx, cy + jy, jitter_px=0) # Jitter already added here
 
     def _click_publish(self, scheduled: bool = False):
         """Click the publish button using CDP mouse events."""
@@ -4118,6 +4180,7 @@ def main():
     p_fill_media = p_fill.add_mutually_exclusive_group(required=True)
     p_fill_media.add_argument("--images", nargs="+", help="Local image file paths")
     p_fill_media.add_argument("--video", help="Local video file path")
+    p_fill.add_argument("--post-time", help="Scheduled publish time (yyyy-MM-dd HH:mm)")
 
     # publish - fill form and click publish
     p_pub = sub.add_parser("publish", help="Fill form and click publish")
@@ -4127,6 +4190,7 @@ def main():
     p_pub_media = p_pub.add_mutually_exclusive_group(required=True)
     p_pub_media.add_argument("--images", nargs="+", help="Local image file paths")
     p_pub_media.add_argument("--video", help="Local video file path")
+    p_pub.add_argument("--post-time", help="Scheduled publish time (yyyy-MM-dd HH:mm)")
 
     # click-publish - just click the publish button on current page
     sub.add_parser("click-publish", help="Click publish button on already-filled page")
@@ -4471,8 +4535,9 @@ def main():
                     title=args.title, content=content, video_path=args.video
                 )
             else:
+                publisher.connect(reuse_existing_tab=reuse_existing_tab)
                 publisher.publish(
-                    title=args.title, content=content, image_paths=args.images
+                    title=args.title, content=content, image_paths=args.images, post_time=getattr(args, "post_time", None)
                 )
             print("FILL_STATUS: READY_TO_PUBLISH")
 

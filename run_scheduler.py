@@ -2,6 +2,7 @@ import time
 import subprocess
 import os
 import datetime
+import random
 
 def run_job():
     print(f"\n[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🚀 开始执行自动化发布流程...")
@@ -19,17 +20,22 @@ def main():
     print("⚙️  规则：立刻执行第一次，之后每 12 小时执行一次")
     print("========================================")
     
-    interval_seconds = 12 * 60 * 60  # 12小时的秒数
+    interval_hours = 12
     
     while True:
         run_job()
         
+        # 添加随机抖动：在设定间隔的基础上 +/- 30 分钟 (可以根据需要调整)
+        jitter_minutes = random.randint(-45, 45)
+        current_sleep_seconds = (interval_hours * 60 + jitter_minutes) * 60
+        
         # 计算下一次执行时间
-        next_run = datetime.datetime.now() + datetime.timedelta(seconds=interval_seconds)
-        print(f"⏳ 等待 12 小时，下一次执行时间预计: {next_run.strftime('%Y-%m-%d %H:%M:%S')} ... (随时可Ctrl+C终止)")
+        next_run = datetime.datetime.now() + datetime.timedelta(seconds=current_sleep_seconds)
+        print(f"⏳ 随机抖动后的等待时间: {current_sleep_seconds / 3600:.2f} 小时 (约 {jitter_minutes:+} 分钟)")
+        print(f"⏳ 下一次执行时间预计: {next_run.strftime('%Y-%m-%d %H:%M:%S')} ... (随时可Ctrl+C终止)")
         
         try:
-            time.sleep(interval_seconds)
+            time.sleep(current_sleep_seconds)
         except KeyboardInterrupt:
             print("\n⏹️ 收到停止信号，已退出定时任务。")
             break

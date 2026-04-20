@@ -15,6 +15,7 @@ import sys
 import time
 import socket
 import subprocess
+import random
 from typing import Optional
 
 CDP_PORT = 9222
@@ -140,7 +141,27 @@ def launch_chrome(
         f"--user-data-dir={user_data_dir}",
         "--no-first-run",
         "--no-default-browser-check",
+        # 禁止后台节流：解决浏览器最小化/后台时 JS 执行频率降低和 DOM 不更新的问题
+        "--disable-background-timer-throttling",
+        "--disable-renderer-backgrounding",
+        "--disable-backgrounding-occluded-windows",
+        "--disable-background-media-suspend",
     ]
+
+    # 随机化窗口大小，增加指纹随机性
+    width = random.randint(1280, 1920)
+    height = random.randint(720, 1080)
+    cmd.append(f"--window-size={width},{height}")
+
+    # 使用常见的 User-Agent，避免 HeadlessChrome 特征
+    # 这里也可以由外部传入，或者使用随机库生成
+    user_agents = [
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+    ]
+    cmd.append(f"--user-agent={random.choice(user_agents)}")
 
     if headless:
         cmd.append("--headless=new")
